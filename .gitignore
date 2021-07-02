@@ -1,0 +1,6 @@
+.ipynb_checkpoints
+out/
+__pycache__/
+models/
+models_1/
+synth_data/

@@ -1,0 +1,6 @@
+torch
+numpy
+matplotlib
+pyyaml
+h5py
+git+git://github.com/j-friedrich/OASIS.git@master
