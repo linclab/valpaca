@@ -3,6 +3,7 @@ import numpy as np
 import os
 
 import matplotlib.pyplot as plt
+from matplotlib.collections import PolyCollection
 from mpl_toolkits.mplot3d import Axes3D
 
 from sklearn.model_selection import train_test_split, StratifiedShuffleSplit, RandomizedSearchCV
@@ -38,6 +39,7 @@ parser.add_argument('-m', '--model_dir', type=str)
 parser.add_argument('-d', '--data_path', type=str)
 parser.add_argument('-n', '--num_runs', default=0, type=int)
 parser.add_argument('-s', '--run_svm', action='store_true', default=False)
+parser.add_argument('-p', '--projections', action='store_true', default=False)
 
 colors = {'linc_red'  : '#E84924',
           'linc_blue' : '#37A1D0'}
@@ -47,7 +49,7 @@ def main():
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    model_name = args.model_dir.split('/')[-3].split('_')[0]
+    # model_name = args.model_dir.split('/')[-3].split('_')[0]
     
     latent_filename = args.model_dir + '/latent.pkl'
     
@@ -55,7 +57,7 @@ def main():
         latent_dict = pickle.load(open(latent_filename, 'rb'))
     except:
         raise('latent.pkl file doesnt exists. run infer_latent.py')
-        
+
     data_dict = utils.read_data(args.data_path)
                 
     num_trials, num_steps, num_cells = latent_dict['ordered']['rates'].shape
@@ -73,17 +75,25 @@ def main():
     
     factors = latent_dict['ordered']['factors']
     
-    fig1 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=True, with_single_trials=False)
-    fig2 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=True, with_single_trials=True)
-    fig3 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=False, with_single_trials=False)
-    fig4 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=False, with_single_trials=True)
+    seed = 100
+    
+    fig1 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=True, with_single_trials=False, 
+                                   projections=args.projections, seed=seed)
+    fig2 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=True, with_single_trials=True, 
+                                   seed=seed)
+    fig3 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=False, with_single_trials=False, 
+                                   projections=args.projections, seed=seed)
+    fig4 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=False, with_single_trials=True, 
+                                   seed=seed)
     
 
 #     plt.legend([l1, l2], ['Surprise', 'Familiar'])
+
+    projections_str = "_withproj" if args.projections else ""
     
-    fig1.savefig(args.model_dir + 'factors_3d_orisplit.svg')
+    fig1.savefig(args.model_dir + 'factors_3d_orisplit{}.svg'.format(projections_str))
     fig2.savefig(args.model_dir + 'factors_3d_orisplit_withtrials.svg')
-    fig3.savefig(args.model_dir + 'factors_3d_orisplit_matchori.svg')
+    fig3.savefig(args.model_dir + 'factors_3d_orisplit_matchori{}.svg'.format(projections_str))
     fig4.savefig(args.model_dir + 'factors_3d_orisplit_matchori_withtrials.svg')
     
     plt.close()
@@ -146,7 +156,7 @@ def main():
     if args.num_runs > 0: 
         np.save(args.model_dir + 'surp_scores', scores)
     
-def plot_factors_3d_all_ori(factors, surp, ori, num_components=3,  compare_same_abc=True, with_single_trials=False):
+def plot_factors_3d_all_ori(factors, surp, ori, num_components=3,  compare_same_abc=True, with_single_trials=False, projections=False, seed=None):
     
     fig = plt.figure(figsize=(12, 6))
     ax1 = fig.add_subplot(241, projection='3d')
@@ -157,7 +167,10 @@ def plot_factors_3d_all_ori(factors, surp, ori, num_components=3,  compare_same_
     ax6 = fig.add_subplot(246)
     ax7 = fig.add_subplot(247)
     ax8 = fig.add_subplot(248)
-    
+
+    for ax in [ax1, ax2, ax3, ax4]:
+        ax.view_init(elev=40., azim=155.)
+
     if compare_same_abc:
         f = lambda x: x
     else:
@@ -170,13 +183,23 @@ def plot_factors_3d_all_ori(factors, surp, ori, num_components=3,  compare_same_
         plot_factors_3d(factors,
                         np.logical_and(surp,ori==theta),
                         np.logical_and(~surp,ori==f(theta)),
-                        ax_up, ax_dn, with_single_trials)
+                        ax_up, ax_dn, with_single_trials, projections, seed)
         ax_up.set_title('Surp: %ideg, Reg: %ideg'%(theta, f(theta)))
-    
+
+    # share y axis for distances
+    sharey_axes = [ax5, ax6, ax7, ax8]
+    min_ylim = np.min([ax.get_ylim()[0] for ax in sharey_axes])
+    max_ylim = np.max([ax.get_ylim()[1] for ax in sharey_axes])
+    for ax in sharey_axes:
+        ax.set_ylim([min_ylim, max_ylim])
+
     return fig
     
-def plot_factors_3d(factors, surp_grp, regl_grp, ax1, ax2, with_single_trials=False):
+def plot_factors_3d(factors, surp_grp, regl_grp, ax1, ax2, with_single_trials=False, projections=False, seed=None):
     
+    if with_single_trials:
+        projections = False
+
     W, b = fit_PCA_Regression(factors[np.logical_or(surp_grp, regl_grp)], num_components=3)
     
     proj = factors @ W.T + b
@@ -185,42 +208,50 @@ def plot_factors_3d(factors, surp_grp, regl_grp, ax1, ax2, with_single_trials=Fa
     
     proj_surp_mean = proj[surp_grp].mean(axis=0)
     proj_regl_mean = proj[regl_grp].mean(axis=0)
-    
-    fac_surp_mean = factors[surp_grp].mean(axis=0)
-    fac_regl_mean = factors[regl_grp].mean(axis=0)
-    
-    ax1.plot(*proj_surp_mean.T, color=colors['linc_red'])
-    ax1.plot(*proj_surp_mean[0], color=colors['linc_red'], marker='o')
-    ax1.plot(*proj_surp_mean[-1], color=colors['linc_red'], marker='^')
-    ax1.plot(*proj_surp_mean[9::9].T, 's', color=colors['linc_red'])
-    
-    ax1.plot(*proj_regl_mean.T, color=colors['linc_blue'])
-    ax1.plot(*proj_regl_mean[0], color=colors['linc_blue'], marker='o')
-    ax1.plot(*proj_regl_mean[-1], color=colors['linc_blue'], marker='^')
-    ax1.plot(*proj_regl_mean[9::9].T, 's', color=colors['linc_blue'])
+
+    for mean, color in zip([proj_regl_mean, proj_surp_mean], ['linc_blue', 'linc_red']):
+        ax1.plot(*mean.T, color=colors[color], lw=2)
+        ax1.plot(*mean[0], color=colors[color], marker='o', lw=0, ms=6)
+        ax1.plot(*mean[-1], color=colors[color], marker='^', lw=0, ms=6)
+        ax1.plot(*mean[9::9].T, color=colors[color], marker='s', lw=0, ms=6)
     
     if with_single_trials:
+        lims = None
+        for trial in proj[regl_grp][::10]:
+            ftrial = savgol_filter(trial, 9, 2, axis=0)
+            ax1.plot(*ftrial.T, color=colors['linc_blue'], lw=0.15)
+            ax1.plot(*ftrial[0], color=colors['linc_blue'], marker='o', ms=1, lw=0)
+            ax1.plot(*ftrial[-1], color=colors['linc_blue'], marker='^', ms=1, lw=0)
+            ax1.plot(*ftrial[9::9].T, 's', color=colors['linc_blue'], ms=1, lw=0)
     
         for trial in proj[surp_grp]:
             ftrial = savgol_filter(trial, 9, 2, axis=0)
             ax1.plot(*ftrial.T, color=colors['linc_red'], lw=0.15)
-            ax1.plot(*ftrial[0], color=colors['linc_red'], marker='o', ms=1)
-            ax1.plot(*ftrial[-1], color=colors['linc_red'], marker='^', ms=1)
-            ax1.plot(*ftrial[9::9].T, 's', color=colors['linc_red'], ms=1)
+            ax1.plot(*ftrial[0], color=colors['linc_red'], marker='o', ms=1, lw=0)
+            ax1.plot(*ftrial[-1], color=colors['linc_red'], marker='^', ms=1, lw=0)
+            ax1.plot(*ftrial[9::9].T, 's', color=colors['linc_red'], ms=1, lw=0)
 
-        for trial in proj[regl_grp][::10]:
-            ftrial = savgol_filter(trial, 9, 2, axis=0)
-            ax1.plot(*ftrial.T, color=colors['linc_blue'], lw=0.15)
-            ax1.plot(*ftrial[0], color=colors['linc_blue'], marker='o', ms=1)
-            ax1.plot(*ftrial[-1], color=colors['linc_blue'], marker='^', ms=1)
-            ax1.plot(*ftrial[9::9].T, 's', color=colors['linc_blue'], ms=1)
-    
+    elif projections:
+        lims = add_stats_projections(ax1, proj[regl_grp], proj[surp_grp])
+        set_all_lims(ax1, lims)
+
+    # to reset the axis ticks
+    ax1.locator_params(nbins=5, axis='x')
+    ax1.locator_params(nbins=5, axis='y')
+    ax1.locator_params(nbins=5, axis='z')
+
     dist = np.sqrt(np.sum((proj_surp_mean - proj_regl_mean)**2, axis=-1))
-    
-    ax2.plot(dist, color='darkslategrey')
-    ax2.plot(0, dist[0], 'o', color='darkslategrey')
-    ax2.plot(44,dist[-1], '^', color='darkslategrey')
-    ax2.plot([9, 18, 27, 36], dist[9::9], 's', color='darkslategrey')
+
+    # bootstrapped st deviation
+    boot_dist_std = bootstrapped_diff_std(proj[regl_grp], proj[surp_grp], seed=seed)
+    ax2.fill_between(range(len(dist)), dist - boot_dist_std, dist + boot_dist_std, 
+                     color='darkslategrey', alpha=0.3)
+
+    ax2.plot(dist, color='darkslategrey', lw=2)
+    ax2.plot(0, dist[0], 'o', color='darkslategrey', ms=6)
+    ax2.plot(44,dist[-1], '^', color='darkslategrey', ms=6)
+    ax2.plot([9, 18, 27, 36], dist[9::9], 's', color='darkslategrey', ms=6)
+
     
 def plot_examples(latent_dict, data_dict, trial_ix=0, num_traces_to_show=8, figsize=(2.75,2)):
     fig, axs = plt.subplots(nrows=2, ncols =2, figsize=figsize, )
@@ -333,7 +364,163 @@ def recurrent_net_eval(x_train, y_train, x_test, y_test, args= {'batch_size' : 2
 def balanced_accuracy_score(targets, predictions):
     C = metrics.confusion_matrix(targets, predictions)
     return np.mean(C.diagonal() / C.sum(axis=1))
+
+def bootstrapped_diff_std(regl, surp, n_samples=1000, seed=None):
+    """
+    bootstrapped_std(data)
     
+    Returns bootstrapped standard deviation of the mean.
+
+    Required args:
+        - regl (3D array): regular data
+        - surp (3D array): surprise data
+    
+    Optional args:
+        - n_samples (int): number of samplings to take for bootstrapping
+                           default: 1000
+
+    Returns:
+        - boot_dist_std (float): bootstrapped distance (data2 mean - data1 mean)
+    """
+
+    rng = np.random.RandomState(seed)
+    
+    # random values
+    n_regl = len(regl)
+    n_surp = len(surp)
+    choices_regl = np.random.choice(
+        np.arange(n_regl), (n_regl, n_samples), replace=True).reshape(n_regl, -1)
+    choices_surp = np.random.choice(
+        np.arange(n_surp), (n_surp, n_samples), replace=True).reshape(n_surp, -1)
+    
+    regl_resampled = np.mean(regl[choices_regl], axis=0)
+    surp_resampled = np.mean(surp[choices_surp], axis=0)
+
+    boot_dist_std = np.std(
+        np.sqrt(np.sum((surp_resampled - regl_resampled)**2, axis=-1)), axis=0)
+    
+    return boot_dist_std
+
+
+def obtain_statistics(data, error='std'):
+    # trials x frames x axis
+    data_mean = data.mean(axis=0)
+    
+    if error == 'std':
+        data_err = data.std(axis=0)
+    elif error == 'var':
+        data_err = data.var(axis=0)
+    else:
+        raise ValueError(f'{error} error not recognized. Must be std or var.')
+    
+    return data_mean, data_err
+
+
+def set_all_lims(ax, axis_lims):
+    for a, axis in enumerate(['X', 'Y', 'Z']):
+        if axis == 'X':
+            ax.set_xlim(axis_lims[a])
+        elif axis == 'Y':
+            ax.set_ylim(axis_lims[a])
+        elif axis == 'Z':
+            ax.set_zlim(axis_lims[a])
+
+            
+def get_lims(ax, regl_mean, regl_err, surp_mean, surp_err, pad=0):
+    low_regl, high_regl = (regl_mean - regl_err).min(axis=0), (regl_mean + regl_err).max(axis=0)
+    pad_regl = (high_regl - low_regl) * pad
+    low_regl_pad, high_regl_pad = (low_regl - pad_regl), (high_regl + pad_regl)
+
+    low_surp, high_surp = (surp_mean - surp_err).min(axis=0), (surp_mean + surp_err).max(axis=0)
+    pad_surp = (high_surp - low_surp) * pad
+    low_surp_pad, high_surp_pad = (low_surp - pad_surp), (high_surp + pad_surp)
+    
+    projections = []
+    all_lims = []
+    for a, axis in enumerate(['X', 'Y', 'Z']):
+        
+        min_val = np.min([low_regl_pad[a], low_surp_pad[a]]) 
+        max_val = np.max([high_regl_pad[a], high_surp_pad[a]])
+        
+        if axis == 'X':
+            lims = list(ax.get_xlim())
+        elif axis == 'Y':
+            lims = list(ax.get_ylim())
+        elif axis == 'Z':
+            lims = list(ax.get_zlim())
+        
+        lims[0] = np.min([min_val, lims[0]])
+        lims[1] = np.max([max_val, lims[1]])
+            
+        if axis in ['Y', 'Z']:
+            projections.append(lims[0]) # low
+        elif axis == 'X':
+            projections.append(lims[1]) # high
+        
+        all_lims.append(lims)
+    
+    return projections, all_lims
+        
+    
+def create_polygon_fill_between(ax, mean, error, offset, color, alpha=0.2, axis='x'):
+    
+    from shapely import geometry
+    
+    axes_keep = [v for v, val in enumerate(['x', 'y', 'z']) if val != axis]
+    top = mean + error
+    bottom = mean - error
+    
+    # https://stackoverflow.com/questions/59167152/project-a-3d-surfacegenerated-by-plot-trisurf-to-xy-plane-and-plot-the-outline
+    polygons = []
+    for i in range(len(mean) - 1):
+        try:
+            polygons.append(geometry.Polygon(
+                [top[i, axes_keep], 
+                 top[i + 1, axes_keep],
+                 bottom[i + 1, axes_keep],
+                 bottom[i, axes_keep]]))
+            
+        except (ValueError, Exception) as err:
+            print(f'Polygon creation error: {err}')
+            pass
+    
+    alpha /= 2
+    
+    for single_polygon in polygons:
+        x, y = single_polygon.exterior.xy
+
+        plg = PolyCollection([list(zip(x, y))], alpha=alpha, facecolor=colors[color])
+        ax.add_collection3d(plg, zs=offset, zdir=axis)
+
+    
+def add_stats_projections(ax, regl, surp, error='std'):
+    regl_mean, regl_err = obtain_statistics(regl, error=error)
+    surp_mean, surp_err = obtain_statistics(surp, error=error)
+    
+    projections, lims = get_lims(ax, regl_mean, regl_err, surp_mean, surp_err, pad=0.05)
+    
+    alpha = 0.4
+    for a, (axis, offset) in enumerate(zip(['x', 'y', 'z'], projections)):
+        for (mean, error, color) in zip(
+            [regl_mean, surp_mean], [regl_err, surp_err], ['linc_blue', 'linc_red']):
+
+            create_polygon_fill_between(ax, mean, error, offset, color, alpha=0.2, axis=axis)
+
+            data = [mean.T[i] for i in range(3) if i != a]
+            ax.plot(*data, zdir=axis, zs=offset, color=colors[color], lw=1.5, alpha=alpha)
+            
+            data = [mean[0, i] for i in range(3) if i != a]
+            ax.plot(*data, zdir=axis, zs=offset, color=colors[color], alpha=alpha, marker='o', lw=0, ms=3.5)
+            
+            data = [mean[-1, i] for i in range(3) if i != a]
+            ax.plot(*data, zdir=axis, zs=offset, color=colors[color], alpha=alpha, marker='^', lw=0, ms=3.5)
+            
+            data = [mean[9::9, i] for i in range(3) if i != a]
+            ax.plot(*data, zdir=axis, zs=offset, color=colors[color], alpha=alpha, marker='s', lw=0, ms=3.5)
+            
+    return lims
+
+
 if __name__ == '__main__':
     main()
     
