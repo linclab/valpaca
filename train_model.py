@@ -9,7 +9,6 @@ import pickle
 import numpy as np
 
 from ar1 import estimate_parameters
-import oasis
 
 from run_manager import RunManager
 from scheduler import LFADS_Scheduler
@@ -99,7 +98,7 @@ def main():
     run_manager.run()
         
     save_figs(save_loc, run_manager.model, run_manager.valid_dl, plotter)
-    pickle.dump(run_manager.loss_dict, open(save_loc+'/loss.pkl', 'wb'))
+    pickle.dump(run_manager.loss_dict, open(os.path.join(save_loc, 'loss.pkl'), 'wb'))
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
@@ -417,7 +416,7 @@ def print_model_description(model):
 def prep_tensorboard(save_loc, plotter, restart):
     import importlib
     if importlib.util.find_spec('torch.utils.tensorboard'):
-        tb_folder = save_loc + 'tensorboard/'
+        tb_folder = os.path.join(save_loc, 'tensorboard')
         if not os.path.exists(tb_folder):
             os.mkdir(tb_folder)
         elif os.path.exists(tb_folder) and restart:
@@ -501,7 +500,7 @@ def generate_save_loc(args, hyperparams, orion_hp_string):
 #-------------------------------------------------------------------
     
 def save_figs(save_loc, model, dl, plotter):
-    fig_folder = save_loc + 'figs/'
+    fig_folder = os.path.join(save_loc, 'figs')
     
     if os.path.exists(fig_folder):
         os.system('rm -rf %s'%fig_folder)
@@ -513,7 +512,7 @@ def save_figs(save_loc, model, dl, plotter):
     fig_dict = plotter['valid'].plot_summary(model= model, dl= dl)
     for k, v in fig_dict.items():
         if type(v) == Figure:
-            v.savefig(fig_folder+k+'.svg')
+            v.savefig(os.path.join(fig_folder, f'{k}.svg'))
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------

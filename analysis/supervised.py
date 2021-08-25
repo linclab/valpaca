@@ -14,8 +14,8 @@ class Supervised_Net(nn.Module):
         
     def fit(self, x_train, y_train, x_test, y_test, batch_size=25, learning_rate=0.0001, pos_weight=[1.0, 9.0], print_freq=0, max_epochs=1000, max_iter=1, save_loc=None, model_name='supervised'):
         best_it_loss = np.inf
-        if not os.path.exists(save_loc+'/analysis'):
-            os.makedirs(save_loc+'/analysis')
+        if not os.path.exists(os.path.join(save_loc, 'analysis')):
+            os.makedirs(os.path.join(save_loc, 'analysis'))
         for it in range(max_iter):
             x_train = torch.Tensor(x_train).to(self.device)
             y_train = y_train.reshape(-1, 1)
@@ -58,7 +58,7 @@ class Supervised_Net(nn.Module):
                 if test_epoch_loss < best_test_loss:
                     epochs_since_best = 0
                     best_test_loss = test_epoch_loss
-                    torch.save({'net' : self.state_dict(), 'opt' : optimizer.state_dict()}, save_loc+'/analysis/best_%i.pth'%it)
+                    torch.save({'net' : self.state_dict(), 'opt' : optimizer.state_dict()}, os.path.join(save_loc, 'analysis', 'best_%i.pth'%it))
                 else:
                     epochs_since_best += 1
                     
@@ -73,11 +73,11 @@ class Supervised_Net(nn.Module):
                 best_it_loss = best_test_loss
                 best_it = it
                 
-        state_dict = torch.load(save_loc+'/analysis/best_%i.pth'%best_it)
+        state_dict = torch.load(os.path.join(save_loc, 'analysis', 'best_%i.pth'%best_it))
         self.load_state_dict(state_dict['net'])
         
         if save_loc is not None:
-            torch.save(state_dict,  save_loc+'/analysis/%s.pth'%model_name)
+            torch.save(state_dict, os.path.join(save_loc, 'analysis', '%s.pth'%model_name))
         
     def predict(self, x):
         self.eval()

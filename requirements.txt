@@ -3,4 +3,5 @@ numpy
 matplotlib
 pyyaml
 h5py
+shapely
 git+git://github.com/j-friedrich/OASIS.git@master

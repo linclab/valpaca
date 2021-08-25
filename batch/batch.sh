@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --cpus-per-task=8                     # Ask for 2 CPUs
-#SBATCH --gres=gpu:2                          # Ask for 1 GPU
-#SBATCH --mem=48                             # Ask for 48 GB of RAM
+#SBATCH --cpus-per-task=8                     # Ask for 8 CPUs
+#SBATCH --gres=gpu:2                          # Ask for 2 GPU
+#SBATCH --mem=48GB                            # Ask for 48 GB of RAM
 #SBATCH --time=3:00:00                        # The job will run for 3 hours
 #SBATCH -o /network/tmp1/bakhtias/slurm-%j.out  # Write the log on tmp1
 

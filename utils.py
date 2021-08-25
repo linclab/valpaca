@@ -105,4 +105,4 @@ def load_parameters(path):
 def save_parameters(save_loc, params):
     if not os.path.isdir(save_loc):
         os.makedirs(save_loc)
-    yaml.dump(params, open(save_loc + 'hyperparameters.yaml', 'w'), default_flow_style=False)
+    yaml.dump(params, open(os.path.join(save_loc, 'hyperparameters.yaml'), 'w'), default_flow_style=False)

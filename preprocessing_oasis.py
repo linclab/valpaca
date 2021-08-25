@@ -117,7 +117,7 @@ def main():
     arg_string += '_z' if args.undo_train_test_split else ''
     arg_string += '_n' if args.normalize else ''
     
-    write_data(os.path.join(dir_name, data_name) + '_%s'%args.data_suffix + arg_string, data_dict)
+    write_data(os.path.join(dir_name, data_name + '_%s'%args.data_suffix + arg_string), data_dict)
 
 def deconvolve_calcium_known(X, g=0.9, s_min=0.5):
     S = np.zeros_like(X)

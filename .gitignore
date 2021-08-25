@@ -1,6 +1,10 @@
 .ipynb_checkpoints
-out/
-__pycache__/
-models/
-models_1/
-synth_data/
+__pycache__
+
+# ignore all subdirectories, except analysis, batch and hyperparameters
+/*/ 
+
+!/analysis/
+!/batch/
+!/hyperparameters/
+

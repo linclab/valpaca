@@ -247,19 +247,21 @@ class RunManager():
                       'epoch' : self.epoch, 'step' : self.step}
         
         # Save network parameters, optimizer state, and training variables
-        if not os.path.isdir(self.save_loc+'checkpoints/'):
-            os.mkdir(self.save_loc+'checkpoints/')
+        checkpoint_direc = os.path.join(self.save_loc, 'checkpoints')
+        if not os.path.isdir(checkpoint_direc):
+            os.mkdir(checkpoint_direc)
         
         torch.save({'net' : self.model.state_dict(), 'opt' : self.optimizer.state_dict(),
                     'sched': self.scheduler.state_dict(), 'run_manager' : train_dict},
-                     self.save_loc+'checkpoints/' + output_filename + '.pth')
+                     os.path.join(checkpoint_direc, output_filename + '.pth'))
         
     #------------------------------------------------------------------------------
     #------------------------------------------------------------------------------
         
     def load_checkpoint(self, input_filename='recent'):
-        if os.path.exists(self.save_loc + 'checkpoints/' + input_filename + '.pth'):
-            state_dict = torch.load(self.save_loc + 'checkpoints/' + input_filename + '.pth')
+        input_path = os.path.join(self.save_loc, 'checkpoints', input_filename + '.pth')
+        if os.path.exists(input_path):
+            state_dict = torch.load(input_path)
             self.model.load_state_dict(state_dict['net'])
             print(state_dict['run_manager']['step'])
             if len(state_dict['opt']['param_groups']) > 1:

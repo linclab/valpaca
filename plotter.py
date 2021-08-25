@@ -64,7 +64,7 @@ class Plotter(object):
         elif mode=='video':
             # TODO
 #             figs_dict['videos'] = self.plot_video(recon['data'].mean(dim=0).detach().cpu().numpy(), orig)
-            save_video_dir = save_dir + 'videos/'
+            save_video_dir = os.path.join(save_dir, 'videos')
             if not os.path.exists(save_video_dir):
                 os.mkdir(save_video_dir)
             self.plot_video(recon['data'].mean(dim=0).detach().cpu().numpy(), orig, save_folder = save_video_dir)
@@ -168,7 +168,7 @@ class Plotter(object):
             neg2 = ax2.imshow(true[0,t,:,:])
             neg1.set_clim(vmin=0, vmax=2)
             neg2.set_clim(vmin=0, vmax=2)
-            fig.savefig(save_folder+str(t)+'.png')
+            fig.savefig(os.path.join(save_folder, f'{t}.png'))
             plt.close(fig)
         
         

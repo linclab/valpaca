@@ -30,10 +30,13 @@ def main():
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    model_name = args.model_dir.split('/')[-3].split('_')[0]
-    data_name = args.model_dir.split('/')[-4]
+    try:
+        model_name = os.path.split(os.path.dirname(args.model_dir.rstrip('/')))[1].split('_')[0]
+    except:
+        raise ValueError("Expected the next to last subdirectory in args.model_dir to be or "
+            "to start with the name of the model, e.g. ../MODELNAME/sub_direc.")
     
-    hp_path = args.model_dir + 'hyperparameters.yaml'
+    hp_path = os.path.join(args.model_dir, 'hyperparameters.yaml')
     hyperparams = load_parameters(hp_path)
     
     data_dict = read_data(args.data_path)
@@ -47,7 +50,7 @@ def main():
                                                                hyperparams = hyperparams)
     
     # Load parameters
-    state_dict = torch.load(args.model_dir + 'checkpoints/%s.pth'%args.checkpoint)
+    state_dict = torch.load(os.path.join(args.model_dir, 'checkpoints', '%s.pth'%args.checkpoint))
     print('checkpoint= %i'%state_dict['run_manager']['epoch'])
     
     model.load_state_dict(state_dict['net'])
@@ -121,8 +124,9 @@ def main():
     for key in ['train', 'valid']:
         results_dict[key], figs_dict[key] = compare_truth(latent_dict[key], truth_dict[key])
         for var, sub_dict in figs_dict[key].items():
-            sub_dict['fig'].savefig(args.model_dir + 'figs/%s_%s_rsq.svg'%(key, var))
-            print('saved figure at ' + args.model_dir + 'figs/%s_%s_rsq.svg'%(key, var))
+            save_path = os.path.join(args.model_dir, 'figs', '%s_%s_rsq.svg'%(key, var))
+            sub_dict['fig'].savefig(save_path)
+            print('saved figure at ' + save_path)
                 
     factor_size = model.factor_size
     if hasattr(model, 'u_latent_size'):
@@ -178,10 +182,10 @@ def main():
     if factor_size == 3:
         for key in ['train', 'valid']:
             fig = plot_3d(X=latent_dict[key]['latent_aligned'].T, title='rsq= %.3f'%results_dict[key]['latent_aligned']['rsq'])
-            fig.savefig(args.model_dir + 'figs/%s_factors3d_rsq.svg'%(key))
+            fig.savefig(os.path.join(args.model_dir, 'figs', '%s_factors3d_rsq.svg'%(key)))
         
-    pickle.dump(latent_dict, file=open('%slatent.pkl'%args.model_dir, 'wb'))
-    yaml.dump(results_dict, open('%sresults.yaml'%args.model_dir, 'w'), default_flow_style=False)
+    pickle.dump(latent_dict, file=open(os.path.join(args.model_dir, 'latent.pkl'), 'wb'))
+    yaml.dump(results_dict, open(os.path.join(args.model_dir, 'results.yaml'), 'w'), default_flow_style=False)
     
 def infer_and_recon(sample, batch_size, model):
     batch = batchify_sample(sample, batch_size)

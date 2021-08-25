@@ -23,15 +23,12 @@ from supervised import Supervised_BiRecurrent_Net
 
 import torch
 import torch.nn as nn
-import torchvision
 
 import argparse
 
 import sys
-sys.path.append('../')
+sys.path.extend(['.', '../'])
 import utils
-
-import pdb
 
 parser = argparse.ArgumentParser()
 
@@ -49,14 +46,12 @@ def main():
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    # model_name = args.model_dir.split('/')[-3].split('_')[0]
+    latent_filename = os.path.join(args.model_dir, 'latent.pkl')
     
-    latent_filename = args.model_dir + '/latent.pkl'
-    
-    try:
-        latent_dict = pickle.load(open(latent_filename, 'rb'))
-    except:
-        raise('latent.pkl file doesnt exists. run infer_latent.py')
+    if not os.path.exists(latent_filename):
+        raise ValueError(f'latent.pkl file not found in {args.model_dir}. Run infer_latent.py')
+
+    latent_dict = pickle.load(open(latent_filename, 'rb'))
 
     data_dict = utils.read_data(args.data_path)
                 
@@ -77,35 +72,31 @@ def main():
     
     seed = 100
     
-    fig1 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=True, with_single_trials=False, 
+    fig1 = plot_factors_3d_all_ori(factors, surp, ori, compare_same_abc=True, with_single_trials=False, 
                                    projections=args.projections, seed=seed)
-    fig2 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=True, with_single_trials=True, 
+    fig2 = plot_factors_3d_all_ori(factors, surp, ori, compare_same_abc=True, with_single_trials=True, 
                                    seed=seed)
-    fig3 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=False, with_single_trials=False, 
+    fig3 = plot_factors_3d_all_ori(factors, surp, ori, compare_same_abc=False, with_single_trials=False, 
                                    projections=args.projections, seed=seed)
-    fig4 = plot_factors_3d_all_ori(factors, surp, ori, num_components=3, compare_same_abc=False, with_single_trials=True, 
+    fig4 = plot_factors_3d_all_ori(factors, surp, ori, compare_same_abc=False, with_single_trials=True, 
                                    seed=seed)
     
 
-#     plt.legend([l1, l2], ['Surprise', 'Familiar'])
+#     plt.legend([l1, l2], ['Surprise', 'Regular'])
 
     projections_str = "_withproj" if args.projections else ""
     
-    fig1.savefig(args.model_dir + 'factors_3d_orisplit{}.svg'.format(projections_str))
-    fig2.savefig(args.model_dir + 'factors_3d_orisplit_withtrials.svg')
-    fig3.savefig(args.model_dir + 'factors_3d_orisplit_matchori{}.svg'.format(projections_str))
-    fig4.savefig(args.model_dir + 'factors_3d_orisplit_matchori_withtrials.svg')
+    fig1.savefig(os.path.join(args.model_dir, 'factors_3d_orisplit{}.svg'.format(projections_str)))
+    fig2.savefig(os.path.join(args.model_dir, 'factors_3d_orisplit_withtrials.svg'))
+    fig3.savefig(os.path.join(args.model_dir, 'factors_3d_orisplit_matchori{}.svg'.format(projections_str)))
+    fig4.savefig(os.path.join(args.model_dir, 'factors_3d_orisplit_matchori_withtrials.svg'))
     
     plt.close()
     
-#     pdb.set_trace()
-    
     fig5 = plot_examples(latent_dict, data_dict, trial_ix=15)
     
-    fig5.savefig(args.model_dir + 'allen_examples.svg')
-    
-#     pdb.set_trace()
-    
+    fig5.savefig(os.path.join(args.model_dir, 'allen_examples.svg'))
+        
     trainp = 0.8
     
     seed = 100
@@ -154,9 +145,9 @@ def main():
         print('n= %i, score: %.3f \u00B1 %.3f'%(i+1, np.mean(scores), np.std(scores)/np.sqrt(i+1)))
         
     if args.num_runs > 0: 
-        np.save(args.model_dir + 'surp_scores', scores)
+        np.save(os.path.join(args.model_dir, 'surp_scores'), scores)
     
-def plot_factors_3d_all_ori(factors, surp, ori, num_components=3,  compare_same_abc=True, with_single_trials=False, projections=False, seed=None):
+def plot_factors_3d_all_ori(factors, surp, ori, compare_same_abc=True, with_single_trials=False, projections=False, seed=None):
     
     fig = plt.figure(figsize=(12, 6))
     ax1 = fig.add_subplot(241, projection='3d')
@@ -203,8 +194,6 @@ def plot_factors_3d(factors, surp_grp, regl_grp, ax1, ax2, with_single_trials=Fa
     W, b = fit_PCA_Regression(factors[np.logical_or(surp_grp, regl_grp)], num_components=3)
     
     proj = factors @ W.T + b
-    
-#     pdb.set_trace()
     
     proj_surp_mean = proj[surp_grp].mean(axis=0)
     proj_regl_mean = proj[regl_grp].mean(axis=0)
@@ -382,15 +371,15 @@ def bootstrapped_diff_std(regl, surp, n_samples=1000, seed=None):
     Returns:
         - boot_dist_std (float): bootstrapped distance (data2 mean - data1 mean)
     """
-
-    rng = np.random.RandomState(seed)
     
+    rng = np.random.RandomState(seed)
+
     # random values
     n_regl = len(regl)
     n_surp = len(surp)
-    choices_regl = np.random.choice(
+    choices_regl = rng.choice(
         np.arange(n_regl), (n_regl, n_samples), replace=True).reshape(n_regl, -1)
-    choices_surp = np.random.choice(
+    choices_surp = rng.choice(
         np.arange(n_surp), (n_surp, n_samples), replace=True).reshape(n_surp, -1)
     
     regl_resampled = np.mean(regl[choices_regl], axis=0)
