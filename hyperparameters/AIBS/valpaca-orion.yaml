@@ -42,8 +42,8 @@ objective:
   l2_gen_scale: 2000
   
 model:
-  factor_size: 32
-  obs_encoder_size: 128
+  factor_size: orion~choices([16,32,64,128])
+  obs_encoder_size: orion~choices([16,32,64,128])
   obs_latent_size: 128
   obs_controller_size: 128
   deep_g_encoder_size: 128

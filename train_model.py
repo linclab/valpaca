@@ -16,10 +16,12 @@ from scheduler import LFADS_Scheduler
 from utils import read_data, load_parameters, save_parameters
 from plotter import Plotter
 
+from orion.client import report_results
+
 parser = argparse.ArgumentParser()
 parser.add_argument('-m', '--model', type=str)
 parser.add_argument('-d', '--data_path', type=str)
-parser.add_argument('-p', '--hyperparameter_path', type=str)
+parser.add_argument('-p', '--config', type=str)
 parser.add_argument('-o', '--output_dir', default='/tmp', type=str)
 parser.add_argument('--max_epochs', default=2000, type=int)
 parser.add_argument('--batch_size', default=None, type=int)
@@ -27,6 +29,7 @@ parser.add_argument('--data_suffix', default='data', type=str)
 parser.add_argument('--detect_local_minima', action='store_true', default=False)
 
 parser.add_argument('-t', '--use_tensorboard', action='store_true', default=False)
+parser.add_argument('--orion', action='store_true', default=False)
 parser.add_argument('-r', '--restart', action='store_true', default=False)
 parser.add_argument('-c', '--do_health_check', action='store_true', default=False)
 
@@ -41,6 +44,7 @@ parser.add_argument('--l2_gen_scale', type=float, default=None)
 parser.add_argument('--l2_con_scale', type=float, default=None)
 parser.add_argument('--seed', type=int, default=None)
 
+
 def main():
     args = parser.parse_args()
     
@@ -51,8 +55,9 @@ def main():
         torch.manual_seed(args.seed)
         torch.cuda.manual_seed(args.seed)
 
-    hyperparams = load_parameters(args.hyperparameter_path)
+    hyperparams = load_parameters(args.config)
     
+    print(f'this FACTOR SIZE = {hyperparams["model"]["factor_size"]} -- this ENCODER SIZE = {hyperparams["model"]["obs_encoder_size"]}')
     hp_string, hyperparams = adjust_hyperparams(args, hyperparams)
 
     save_loc, hyperparams = generate_save_loc(args, hyperparams, hp_string)
@@ -99,6 +104,9 @@ def main():
         
     save_figs(save_loc, run_manager.model, run_manager.valid_dl, plotter)
     pickle.dump(run_manager.loss_dict, open(os.path.join(save_loc, 'loss.pkl'), 'wb'))
+    
+    if args.orion:
+        report_results({'name':'val_loss', 'type':'objective', 'value':run_manager.save_checkpoint('best')})
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
@@ -384,7 +392,7 @@ def prep_optimizer(model, hyperparams):
     
     optimizer = opt.Adam([p for p in model.parameters() if p.requires_grad],
                          lr=hyperparams['optimizer']['lr_init'],
-                         betas=hyperparams['optimizer']['betas'],
+                         betas=(hyperparams['optimizer']['beta1'],hyperparams['optimizer']['beta2']),
                          eps=hyperparams['optimizer']['eps'])
     
     scheduler = LFADS_Scheduler(optimizer      = optimizer,
