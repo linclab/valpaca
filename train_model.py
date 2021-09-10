@@ -16,6 +16,8 @@ from scheduler import LFADS_Scheduler
 from utils import read_data, load_parameters, save_parameters
 from plotter import Plotter
 
+# import orion
+# from orion.client import report_objective
 from orion.client import report_results
 
 parser = argparse.ArgumentParser()
@@ -30,7 +32,7 @@ parser.add_argument('--detect_local_minima', action='store_true', default=False)
 
 parser.add_argument('-t', '--use_tensorboard', action='store_true', default=False)
 parser.add_argument('--orion', action='store_true', default=False)
-parser.add_argument('-r', '--restart', action='store_true', default=False)
+parser.add_argument('-r', '--restart', action='store_true', default=True)
 parser.add_argument('-c', '--do_health_check', action='store_true', default=False)
 
 parser.add_argument('--lr', type=float, default=None)
@@ -106,7 +108,8 @@ def main():
     pickle.dump(run_manager.loss_dict, open(os.path.join(save_loc, 'loss.pkl'), 'wb'))
     
     if args.orion:
-        report_results({'name':'val_loss', 'type':'objective', 'value':run_manager.save_checkpoint('best')})
+        report_results([{'name':'val_loss', 'type':'objective', 'value':run_manager.loss_dict['valid']['total'][-1]}])
+#         report_objective(run_manager.loss_dict['valid']['total'][-1], name='objective')
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
