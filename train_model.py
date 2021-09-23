@@ -59,8 +59,9 @@ def main():
 
     hyperparams = load_parameters(args.config)
     
-    print(f'this FACTOR SIZE = {hyperparams["model"]["factor_size"]} -- this ENCODER SIZE = {hyperparams["model"]["obs_encoder_size"]}')
+    
     hp_string, hyperparams = adjust_hyperparams(args, hyperparams)
+    print(f'FACTOR SIZE = {hyperparams["model"]["factor_size"]} -- OBS ENCODER SIZE = {hyperparams["model"]["obs_encoder_size"]} -- DEEP g ENCODER SIZE = {hyperparams["model"]["deep_g_encoder"]}')
 
     save_loc, hyperparams = generate_save_loc(args, hyperparams, hp_string)
     
@@ -486,7 +487,16 @@ def adjust_hyperparams(args, hyperparams):
     
     if args.seed:
         hp_string += 'seed= %s'%args.seed
-        
+    
+    if hyperparams['model']['deep_width'] is not None:
+        hyperparams['model']['deep_g_encoder'] = hyperparams['model']['deep_width']
+        hyperparams['model']['deep_c_encoder'] = hyperparams['model']['deep_width']
+        hyperparams['model']['deep_controller'] = hyperparams['model']['deep_width']
+    
+    if hyperparams['model']['obs_width'] is not None:
+        hyperparams['model']['obs_controller'] = hyperparams['model']['obs_width']
+        hyperparams['model']['obs_encoder'] = hyperparams['model']['obs_width']
+
     hp_string = hp_string.replace('\n', '-').replace(' ', '').replace('=', '')
     hp_string = '_hp-'+ hp_string
         

@@ -43,7 +43,7 @@ objective:
   
 model:
   factor_size: orion~choices([16,32,64,128])
-  obs_encoder_size: orion~choices([16,32,64,128])
+  obs_encoder_size: 128
   obs_latent_size: 128
   obs_controller_size: 128
   deep_g_encoder_size: 128
@@ -52,7 +52,8 @@ model:
   deep_u_latent_size: 1
   deep_controller_size: 64
   generator_size: 200
-  
+  deep_width: orion~choices([16,32,64,128])
+  obs_width: orion~choices([16,32,64,128])
   obs:
     snr: 2.0
     gain: 
