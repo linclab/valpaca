@@ -18,8 +18,8 @@ objective:
     weight : 0.0
     min: 0.0
     max: 1.0
-    schedule_dur: 3200
-    schedule_start: 1600
+    schedule_dur: orion~choices([1600,3200])
+    schedule_start: orion~choices([0,1600])
   kl_obs:
     weight : 0.0
     min: 0.0
@@ -30,8 +30,8 @@ objective:
     weight: 0.0
     min: 0.0
     max: 1.0
-    schedule_dur: 3200
-    schedule_start: 1600
+    schedule_dur: orion~choices([1600,3200])
+    schedule_start: orion~choices([0,1600])
   recon_deep:
     weight: 0.0
     min: 1.0
@@ -42,7 +42,7 @@ objective:
   l2_gen_scale: 2000
   
 model:
-  factor_size: orion~choices([16,32,64,128])
+  factor_size: 32
   obs_encoder_size: 128
   obs_latent_size: 128
   obs_controller_size: 128
@@ -52,8 +52,8 @@ model:
   deep_u_latent_size: 1
   deep_controller_size: 64
   generator_size: 200
-  deep_width: orion~choices([16,32,64,128])
-  obs_width: orion~choices([16,32,64,128])
+  deep_width: 64
+  obs_width: 32
   obs:
     snr: 2.0
     gain: 

@@ -496,6 +496,7 @@ def adjust_hyperparams(args, hyperparams):
     if hyperparams['model']['obs_width'] is not None:
         hyperparams['model']['obs_controller'] = hyperparams['model']['obs_width']
         hyperparams['model']['obs_encoder'] = hyperparams['model']['obs_width']
+        
 
     hp_string = hp_string.replace('\n', '-').replace(' ', '').replace('=', '')
     hp_string = '_hp-'+ hp_string
