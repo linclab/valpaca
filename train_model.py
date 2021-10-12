@@ -57,11 +57,9 @@ def main():
     
     
     hp_string, hyperparams = adjust_hyperparams(args, hyperparams)
-    model_desc = f'FACTOR SIZE = {hyperparams["model"]["factor_size"]} -- OBS ENCODER SIZE = {hyperparams["model"]["obs_encoder_size"]}'
+
     if args.model in ["valpaca", "svlae"]:
-        print(f'{model_desc} -- DEEP g ENCODER SIZE = {hyperparams["model"]["deep_g_encoder_size"]}')
-    else:
-        print(f'{model_desc} -- g ENCODER SIZE = {hyperparams["model"]["g_encoder_size"]}')
+        print(f'FACTOR SIZE = {hyperparams["model"]["factor_size"]} -- OBS ENCODER SIZE = {hyperparams["model"]["obs_encoder_size"]} -- DEEP g ENCODER SIZE = {hyperparams["model"]["deep_g_encoder_size"]}')
 
     save_loc, hyperparams = generate_save_loc(args, hyperparams, hp_string)
     
@@ -499,10 +497,11 @@ def adjust_hyperparams(args, hyperparams):
             hyperparams['model']['deep_controller_size'] = hyperparams['model']['deep_width']
 
         else: # lfads
-            hyperparams['model']['g_encoder_size'] = hyperparams['model']['obs_width']
+            hyperparams['model']['g_encoder_size'] = hyperparams['model']['deep_width']
             hyperparams['model']['c_encoder_size'] = hyperparams['model']['deep_width']
+            hyperparams['model']['controller_size'] = hyperparams['model']['deep_width']
     
-    if "obs" in hyperparams['model'].keys() and hyperparams['model']['obs_width'] is not None: # valpaca or svlae
+    if 'obs' in hyperparams['model'].keys() and hyperparams['model']['obs_width'] is not None: # valpaca or svlae
         hyperparams['model']['obs_controller_size'] = hyperparams['model']['obs_width']
         hyperparams['model']['obs_encoder_size'] = hyperparams['model']['obs_width']
         

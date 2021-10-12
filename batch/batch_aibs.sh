@@ -3,9 +3,9 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:2
 #SBATCH --mem=48GB
-#SBATCH --array=0 #-3
+#SBATCH --array=0-3
 #SBATCH --time=5:00:00
-#SBATCH -o /network/scratch/g/gillonco/allen-valpaca-%A-%a.out 
+#SBATCH -o /network/scratch/g/gillonco/aibs_%A-%a.out 
 
 # 1. load modules
 module load anaconda/3
@@ -43,7 +43,7 @@ EXIT=0
 
 # Train model
 echo -e "\nTraining $MODEL model$sub_str..."
-python train_model.py --model $MODEL --data_suffix fluor --data_path $DATA_PATH --config hyperparameters/AIBS/$HYPERPARS --output_dir $RESULTS_DIR --batch_size 100 --max_epochs 10 --seed $SEED
+python train_model.py --model $MODEL --data_suffix fluor --data_path $DATA_PATH --config hyperparameters/AIBS/$HYPERPARS --output_dir $RESULTS_DIR --batch_size 100 --max_epochs 1000 --seed $SEED
 code="$?"
 if [ "$code" -gt "$EXIT" ]; then EXIT="$code"; fi
 
@@ -65,7 +65,7 @@ if [ "$code" -gt "$EXIT" ]; then exit "$code"; fi # exit, if failed
 
 # Run PCA/LogReg
 echo -e "\nProducing PCA plots and running logistic regressions..." # most time consuming step...
-python analysis/allen_analysis.py --model_dir $NEW_MODEL_DIR --data_path $DATA_PATH --num_runs 2 --projections
+python analysis/allen_analysis.py --model_dir $NEW_MODEL_DIR --data_path $DATA_PATH --num_runs 50 --projections
 code="$?"
 if [ "$code" -gt "$EXIT" ]; then EXIT="$code"; fi # exit, if failed
 
