@@ -35,8 +35,9 @@ model:
   u_latent_size: 0
   controller_size: 0
   generator_size: 64
-  nonlin: exp
-  
+  deep_width: null
+  nonlin: exp  
+
   prior:
     g0: 
       mean: 
