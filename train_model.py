@@ -16,10 +16,6 @@ from scheduler import LFADS_Scheduler
 from utils import read_data, load_parameters, save_parameters
 from plotter import Plotter
 
-# import orion
-# from orion.client import report_objective
-from orion.client import report_results
-
 parser = argparse.ArgumentParser()
 parser.add_argument('-m', '--model', type=str)
 parser.add_argument('-d', '--data_path', type=str)
@@ -61,7 +57,11 @@ def main():
     
     
     hp_string, hyperparams = adjust_hyperparams(args, hyperparams)
-    print(f'FACTOR SIZE = {hyperparams["model"]["factor_size"]} -- OBS ENCODER SIZE = {hyperparams["model"]["obs_encoder_size"]} -- DEEP g ENCODER SIZE = {hyperparams["model"]["deep_g_encoder"]}')
+    model_desc = f'FACTOR SIZE = {hyperparams["model"]["factor_size"]} -- OBS ENCODER SIZE = {hyperparams["model"]["obs_encoder_size"]}'
+    if args.model in ["valpaca", "svlae"]:
+        print(f'{model_desc} -- DEEP g ENCODER SIZE = {hyperparams["model"]["deep_g_encoder_size"]}')
+    else:
+        print(f'{model_desc} -- g ENCODER SIZE = {hyperparams["model"]["g_encoder_size"]}')
 
     save_loc, hyperparams = generate_save_loc(args, hyperparams, hp_string)
     
@@ -109,6 +109,10 @@ def main():
     pickle.dump(run_manager.loss_dict, open(os.path.join(save_loc, 'loss.pkl'), 'wb'))
     
     if args.orion:
+        # import orion
+        # from orion.client import report_objective
+        from orion.client import report_results
+        
         report_results([{'name':'val_loss', 'type':'objective', 'value':run_manager.loss_dict['valid']['total'][-1]}])
 #         report_objective(run_manager.loss_dict['valid']['total'][-1], name='objective')
 
@@ -487,17 +491,21 @@ def adjust_hyperparams(args, hyperparams):
     
     if args.seed:
         hp_string += 'seed= %s'%args.seed
-    
-    if hyperparams['model']['deep_width'] is not None:
-        hyperparams['model']['deep_g_encoder'] = hyperparams['model']['deep_width']
-        hyperparams['model']['deep_c_encoder'] = hyperparams['model']['deep_width']
-        hyperparams['model']['deep_controller'] = hyperparams['model']['deep_width']
-    
-    if hyperparams['model']['obs_width'] is not None:
-        hyperparams['model']['obs_controller'] = hyperparams['model']['obs_width']
-        hyperparams['model']['obs_encoder'] = hyperparams['model']['obs_width']
-        
 
+    if hyperparams['model']['deep_width'] is not None:
+        if "obs" in hyperparams['model'].keys(): # valpaca or svlae
+            hyperparams['model']['deep_g_encoder_size'] = hyperparams['model']['deep_width']
+            hyperparams['model']['deep_c_encoder_size'] = hyperparams['model']['deep_width']
+            hyperparams['model']['deep_controller_size'] = hyperparams['model']['deep_width']
+
+        else: # lfads
+            hyperparams['model']['g_encoder_size'] = hyperparams['model']['obs_width']
+            hyperparams['model']['c_encoder_size'] = hyperparams['model']['deep_width']
+    
+    if "obs" in hyperparams['model'].keys() and hyperparams['model']['obs_width'] is not None: # valpaca or svlae
+        hyperparams['model']['obs_controller_size'] = hyperparams['model']['obs_width']
+        hyperparams['model']['obs_encoder_size'] = hyperparams['model']['obs_width']
+        
     hp_string = hp_string.replace('\n', '-').replace(' ', '').replace('=', '')
     hp_string = '_hp-'+ hp_string
         

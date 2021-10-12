@@ -29,13 +29,14 @@ objective:
 
 model:
   factor_size: 32
-  g_encoder_size: 128
-  c_encoder_size: 128
+  # g_encoder_size: 64 # set/updated by deep_width
+  # c_encoder_size: 64 # set/updated by deep_width
   g_latent_size: 64
   u_latent_size: 1
-  controller_size: 128
+  # controller_size: 64 # set/updated by deep_width
   generator_size: 200
-  
+  deep_width: 64
+
   prior:
     g0: 
       mean: 

@@ -1,10 +1,8 @@
 optimizer:
   lr_init: 0.01
-  beta1: 0.9
-  beta2: 0.99
-#   betas: !!python/tuple
-#   - 0.9
-#   - 0.99
+  betas: !!python/tuple
+  - 0.9
+  - 0.99
   eps: 0.1
 
 scheduler:
@@ -43,19 +41,18 @@ objective:
   
 model:
   factor_size: 32
-  # obs_encoder_size: 32 # set/updated by obs_width
+  obs_encoder_size: 128 # set/updated by obs_width
   obs_latent_size: 128
-  # obs_controller_size: 32 # set/updated by obs_width
-  # deep_g_encoder_size: 64 # set/updated by deep_width
-  # deep_c_encoder_size: 64 # set/updated by deep_width
+  obs_controller_size: 128 # set/updated by obs_width
+  deep_g_encoder_size: 128 # set/updated by deep_width
+  deep_c_encoder_size: 128 # set/updated by deep_width
   deep_g_latent_size: 64
   deep_u_latent_size: 1
-  # deep_controller_size: 64 # set/updated by deep_width
+  deep_controller_size: 64 # set/updated by deep_width
   generator_size: 200
-  deep_width: 64
-  obs_width: 32
+  deep_width: None # now 64
+  obs_width: 128 # now 32
   obs:
-    snr: 2.0
     gain: 
       value: 1.0
       learnable: false
@@ -99,11 +96,13 @@ model:
 
   clip_val: 5.0
   generator_burn: 10
-  obs_pad: 3
   dropout: 0.05
   max_norm: 200
   normalize_factors: true
   factor_bias: false
   deep_unfreeze_step: 1600
-  
-model_name: valpaca
+  obs_early_stop_step: null
+  obs_continue_step: null
+  ar1_start_step: null
+
+model_name: svlae
