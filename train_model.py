@@ -24,12 +24,12 @@ parser.add_argument('-o', '--output_dir', default='/tmp', type=str)
 parser.add_argument('--max_epochs', default=2000, type=int)
 parser.add_argument('--batch_size', default=None, type=int)
 parser.add_argument('--data_suffix', default='data', type=str)
-parser.add_argument('--detect_local_minima', action='store_true', default=False)
+parser.add_argument('--detect_local_minima', action='store_true')
 
-parser.add_argument('-t', '--use_tensorboard', action='store_true', default=False)
-parser.add_argument('--orion', action='store_true', default=False)
-parser.add_argument('-r', '--restart', action='store_true', default=True)
-parser.add_argument('-c', '--do_health_check', action='store_true', default=False)
+parser.add_argument('-t', '--use_tensorboard', action='store_true')
+parser.add_argument('--orion', action='store_true')
+parser.add_argument('-r', '--restart', action='store_true')
+parser.add_argument('-c', '--do_health_check', action='store_true')
 
 parser.add_argument('--lr', type=float, default=None)
 parser.add_argument('--kl_deep_max', type=float, default=None)
@@ -494,12 +494,10 @@ def adjust_hyperparams(args, hyperparams):
         if "obs" in hyperparams['model'].keys(): # valpaca or svlae
             hyperparams['model']['deep_g_encoder_size'] = hyperparams['model']['deep_width']
             hyperparams['model']['deep_c_encoder_size'] = hyperparams['model']['deep_width']
-            hyperparams['model']['deep_controller_size'] = hyperparams['model']['deep_width']
 
         else: # lfads
             hyperparams['model']['g_encoder_size'] = hyperparams['model']['deep_width']
             hyperparams['model']['c_encoder_size'] = hyperparams['model']['deep_width']
-            hyperparams['model']['controller_size'] = hyperparams['model']['deep_width']
     
     if 'obs' in hyperparams['model'].keys() and hyperparams['model']['obs_width'] is not None: # valpaca or svlae
         hyperparams['model']['obs_controller_size'] = hyperparams['model']['obs_width']

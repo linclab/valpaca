@@ -35,8 +35,8 @@ parser = argparse.ArgumentParser()
 parser.add_argument('-m', '--model_dir', type=str)
 parser.add_argument('-d', '--data_path', type=str)
 parser.add_argument('-n', '--num_runs', default=0, type=int)
-parser.add_argument('-s', '--run_svm', action='store_true', default=False)
-parser.add_argument('-p', '--projections', action='store_true', default=False)
+parser.add_argument('-s', '--run_svm', action='store_true')
+parser.add_argument('-p', '--projections', action='store_true')
 
 colors = {'linc_red'  : '#E84924',
           'linc_blue' : '#37A1D0'}

@@ -47,9 +47,9 @@ model:
   deep_c_encoder_size: 128 # set/updated by deep_width if not null
   deep_g_latent_size: 64
   deep_u_latent_size: 1
-  deep_controller_size: 64 # set/updated by deep_width if not null
+  deep_controller_size: 64
   generator_size: 200
-  deep_width: null
+  deep_width: 128
   obs_width: 128
   obs:
     snr: 2.0

@@ -32,7 +32,7 @@ model:
   c_encoder_size: 128 # set/updated by deep_width if not null
   g_latent_size: 64
   u_latent_size: 1
-  controller_size: 128 # set/updated by deep_width if not null
+  controller_size: 128
   generator_size: 200
   deep_width: 128
 
