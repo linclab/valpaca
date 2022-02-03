@@ -3,9 +3,9 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:2
 #SBATCH --mem=48GB
-#SBATCH --array=0-3
-#SBATCH --time=5:00:00
-#SBATCH -o /network/scratch/g/gillonco/aibs_%A-%a.out 
+#SBATCH --array=0-7
+#SBATCH --time=6:00:00
+#SBATCH -o /network/scratch/g/gillonco/allen_%A-%a.out 
 
 # 1. load modules
 module load anaconda/3
@@ -48,16 +48,16 @@ fi
 
 SCRATCH=/network/scratch/g/gillonco
 RESULTS_DIR=$SCRATCH/valpaca/results
-MODEL_DIR=$RESULTS_DIR/AIBS_m1s1_soma_ou_t0.3_s2.0_f_z_n/$DIREC/$MODEL_DESC
+MODEL_DIR=$RESULTS_DIR/allen_m1s1_soma_ou_t0.3_s2.0_f_z_n/$DIREC/$MODEL_DESC
 
-cp $SCRATCH/valpaca/AIBS_m1s1_soma_ou_t0.3_s2.0_f_z_n $SLURM_TMPDIR
-DATA_PATH=$SLURM_TMPDIR/AIBS_m1s1_soma_ou_t0.3_s2.0_f_z_n
+cp $SCRATCH/valpaca/allen_m1s1_soma_ou_t0.3_s2.0_f_z_n $SLURM_TMPDIR
+DATA_PATH=$SLURM_TMPDIR/allen_m1s1_soma_ou_t0.3_s2.0_f_z_n
 
 EXIT=0
 
 # Train model
 echo -e "\nTraining $MODEL model$sub_str..."
-python train_model.py --restart --model $MODEL --data_suffix $DATA_SUFFIX --data_path $DATA_PATH --config hyperparameters/AIBS/$HYPERPARS --output_dir $RESULTS_DIR --batch_size 68 --max_epochs 800 --seed $SEED
+python train_model.py --restart --model $MODEL --data_suffix $DATA_SUFFIX --data_path $DATA_PATH --config hyperparameters/allen/$HYPERPARS --output_dir $RESULTS_DIR --batch_size 68 --max_epochs 800 --seed $SEED
 code="$?"
 if [ "$code" -gt "$EXIT" ]; then EXIT="$code"; fi
 
@@ -77,9 +77,9 @@ code="$?"
 if [ "$code" -gt "$EXIT" ]; then exit "$code"; fi # exit, if failed
 
 
-# Run PCA/LogReg
-echo -e "\nProducing PCA plots and running logistic regressions..." # most time consuming step...
-python analysis/allen_analysis.py --model_dir $NEW_MODEL_DIR --data_path $DATA_PATH --num_runs 50 --projections
+# Run PCA and decoders
+echo -e "\nProducing PCA factor plots and running decoders..." # most time consuming step...
+python analysis/allen_analysis.py --model_dir $NEW_MODEL_DIR --data_path $DATA_PATH --run_svm --run_logreg --num_runs 50 --projections 
 code="$?"
 if [ "$code" -gt "$EXIT" ]; then EXIT="$code"; fi # exit, if failed
 

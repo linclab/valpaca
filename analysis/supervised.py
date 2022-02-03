@@ -12,7 +12,7 @@ class Supervised_Net(nn.Module):
     def __init__(self):
         super(Supervised_Net, self).__init__()
         
-    def fit(self, x_train, y_train, x_test, y_test, batch_size=25, learning_rate=0.0001, pos_weight=[1.0, 9.0], print_freq=0, max_epochs=1000, max_iter=1, save_loc=None, model_name='supervised'):
+    def fit(self, x_train, y_train, x_valid, y_valid, batch_size=25, learning_rate=0.0001, pos_weight=[1.0, 9.0], print_freq=0, max_epochs=1000, max_iter=1, save_loc=None, model_name='supervised'):
         best_it_loss = np.inf
         if not os.path.exists(os.path.join(save_loc, 'analysis')):
             os.makedirs(os.path.join(save_loc, 'analysis'))
@@ -23,20 +23,20 @@ class Supervised_Net(nn.Module):
             train_ds = torch.utils.data.TensorDataset(x_train, y_train)
             train_dl = torch.utils.data.DataLoader(train_ds, batch_size=batch_size)
 
-            x_test = torch.Tensor(x_test).to(self.device)
-            y_test = y_test.reshape(-1, 1)
-            y_test = torch.Tensor(OneHotEncoder(sparse=False).fit(y_test).transform(y_test)).to(self.device)
-            test_ds = torch.utils.data.TensorDataset(x_test, y_test)
-            test_dl = torch.utils.data.DataLoader(test_ds, batch_size=batch_size)
+            x_valid = torch.Tensor(x_valid).to(self.device)
+            y_valid = y_valid.reshape(-1, 1)
+            y_valid = torch.Tensor(OneHotEncoder(sparse=False).fit(y_valid).transform(y_valid)).to(self.device)
+            valid_ds = torch.utils.data.TensorDataset(x_valid, y_valid)
+            valid_dl = torch.utils.data.DataLoader(valid_ds, batch_size=batch_size)
 
             criterion = nn.BCEWithLogitsLoss(pos_weight=torch.Tensor(pos_weight)).to(self.device)
             optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
-            best_test_loss = np.inf
+            best_valid_loss = np.inf
             for epoch in range(max_epochs):
                 self.train()
                 running_loss = 0
                 tic = time.time()
-                for i, (x,y) in enumerate(train_dl):
+                for i, (x, y) in enumerate(train_dl):
                     optimizer.zero_grad()
                     y_hat = self(x)
                     loss = criterion(y_hat, y)
@@ -47,17 +47,17 @@ class Supervised_Net(nn.Module):
 
                 self.eval()
                 running_loss = 0
-                for i, (x,y) in enumerate(test_dl):
+                for i, (x, y) in enumerate(valid_dl):
                     with torch.no_grad():
                         y_hat = self(x)
                         loss = criterion(y_hat, y)
                         running_loss += loss.data
-                test_epoch_loss = running_loss/(i+1)
+                valid_epoch_loss = running_loss/(i+1)
                 toc = time.time()
                 
-                if test_epoch_loss < best_test_loss:
+                if valid_epoch_loss < best_valid_loss:
                     epochs_since_best = 0
-                    best_test_loss = test_epoch_loss
+                    best_valid_loss = valid_epoch_loss
                     torch.save({'net' : self.state_dict(), 'opt' : optimizer.state_dict()}, os.path.join(save_loc, 'analysis', 'best_%i.pth'%it))
                 else:
                     epochs_since_best += 1
@@ -67,10 +67,10 @@ class Supervised_Net(nn.Module):
 
                 if print_freq>0:
                     if (epoch+1)%print_freq == 0:
-                        print('Epoch %4d: train loss= %.3f, test_loss= %.3f, running time= %.3f s, %i epochs since best, best=%.3f'%(epoch+1, train_epoch_loss, test_epoch_loss, toc-tic, epochs_since_best, best_test_loss))
+                        print('Epoch %4d: train loss= %.3f, valid_loss= %.3f, running time= %.3f s, %i epochs since best, best=%.3f'%(epoch+1, train_epoch_loss, valid_epoch_loss, toc-tic, epochs_since_best, best_valid_loss))
 
-            if best_test_loss < best_it_loss:
-                best_it_loss = best_test_loss
+            if best_valid_loss < best_it_loss:
+                best_it_loss = best_valid_loss
                 best_it = it
                 
         state_dict = torch.load(os.path.join(save_loc, 'analysis', 'best_%i.pth'%best_it))

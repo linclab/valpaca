@@ -2,6 +2,7 @@ import h5py
 import os
 import json
 import numpy as np
+import pickle
 import yaml
 import torch
 
@@ -106,3 +107,14 @@ def save_parameters(save_loc, params):
     if not os.path.isdir(save_loc):
         os.makedirs(save_loc)
     yaml.dump(params, open(os.path.join(save_loc, 'hyperparameters.yaml'), 'w'), default_flow_style=False)
+
+def load_latent(model_dir):
+    latent_filename = os.path.join(model_dir, 'latent.pkl')
+    if not os.path.exists(latent_filename):
+        raise ValueError(
+            f'latent.pkl file not found in {model_dir}. Run infer_latent.py'
+            )
+    with open(latent_filename, 'rb') as f:
+        latent_dict = pickle.load(f)
+    return latent_dict
+
