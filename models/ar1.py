@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 from scipy.optimize import curve_fit
 import scipy.signal
@@ -55,16 +57,23 @@ def deconvolve(y, g=(None,), sn=None, b=None, b_nonneg=True,
         if sn is None:
             sn = est[1]
     if len(g) == 1:
-        return constrained_oasisAR1(y, g[0], sn, optimize_b=True if b is None else False,
-                                    b_nonneg=b_nonneg, optimize_g=optimize_g,
-                                    penalty=penalty, **kwargs)
+        import oasis
+        return oasis.constrained_oasisAR1(
+            y, g[0], sn, optimize_b=True if b is None else False,
+            b_nonneg=b_nonneg, optimize_g=optimize_g,
+            penalty=penalty, **kwargs
+            )
     elif len(g) == 2:
+        import oasis
         if optimize_g > 0:
-            warn("Optimization of AR parameters is already fairly stable for AR(1), "
-                 "but slower and more experimental for AR(2)")
-        return constrained_onnlsAR2(y, g, sn, optimize_b=True if b is None else False,
-                                    b_nonneg=b_nonneg, optimize_g=optimize_g,
-                                    penalty=penalty, **kwargs)
+            warnings.warn(
+                "Optimization of AR parameters is already fairly stable for AR(1), "
+                "but slower and more experimental for AR(2)")
+        return oasis.constrained_onnlsAR2(
+            y, g, sn, optimize_b=True if b is None else False,
+            b_nonneg=b_nonneg, optimize_g=optimize_g,
+            penalty=penalty, **kwargs
+            )
     else:
         print('g must have length 1 or 2, cause only AR(1) and AR(2) are currently implemented')
 

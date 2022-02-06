@@ -1,7 +1,7 @@
-import torch
 import time
 import os
-import functools, collections, operator
+
+import torch
 
 
 class RunManager():

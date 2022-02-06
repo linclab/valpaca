@@ -1,10 +1,14 @@
+import sys
+
+from numpy import log
 import torch
 import torch.nn as nn
-from lfads import LFADS_Net, LFADS_Encoder, LFADS_ControllerCell
-from objective import kldiv_gaussian_gaussian
-from numpy import log
+import torch.nn.functional as F
 
-class VaLPACa_Net(nn.Module):
+sys.path.extend(['.', '..'])
+from models import lfads, objective
+
+class SVLAE_Net(nn.Module):
     
     def __init__(self, input_size,
                  deep_g_encoder_size= 64, deep_c_encoder_size= 64,
@@ -27,7 +31,7 @@ class VaLPACa_Net(nn.Module):
                  deep_unfreeze_step = 2000, obs_pad = 3, 
                  do_normalize_factors=True, factor_bias = False, device='cpu'):
         
-        super(VaLPACa_Net, self).__init__()
+        super(SVLAE_Net, self).__init__()
         
         self.input_size           = input_size
         self.obs_encoder_size     = obs_encoder_size
@@ -69,21 +73,21 @@ class VaLPACa_Net(nn.Module):
                                                 clip_val        = self.clip_val,
                                                 device          = self.device)
         
-        self.deep_model           = LFADS_Net(input_size      = self.input_size,
-                                              g_encoder_size  = self.deep_g_encoder_size,
-                                              c_encoder_size  = self.deep_c_encoder_size,
-                                              g_latent_size   = self.deep_g_latent_size,
-                                              u_latent_size   = self.deep_u_latent_size,
-                                              controller_size = self.deep_controller_size,
-                                              generator_size  = self.generator_size,
-                                              factor_size     = self.factor_size,
-                                              prior    = prior['deep'],
-                                              clip_val = self.clip_val,
-                                              dropout  = dropout,
-                                              max_norm = self.max_norm,
-                                              do_normalize_factors = self.do_normalize_factors,
-                                              factor_bias = self.factor_bias,
-                                              device   = self.device)
+        self.deep_model           = lfads.LFADS_Net(input_size      = self.obs_encoder_size*2,
+                                                    g_encoder_size  = self.deep_g_encoder_size,
+                                                    c_encoder_size  = self.deep_c_encoder_size,
+                                                    g_latent_size   = self.deep_g_latent_size,
+                                                    u_latent_size   = self.deep_u_latent_size,
+                                                    controller_size = self.deep_controller_size,
+                                                    generator_size  = self.generator_size,
+                                                    factor_size     = self.factor_size,
+                                                    prior    = prior['deep'],
+                                                    clip_val = self.clip_val,
+                                                    dropout  = dropout,
+                                                    max_norm = self.max_norm,
+                                                    do_normalize_factors = self.do_normalize_factors,
+                                                    factor_bias = self.factor_bias,
+                                                    device   = self.device)
         
         self.deep_model.add_module('fc_logrates', nn.Linear(self.factor_size, self.input_size))
         
@@ -103,7 +107,7 @@ class VaLPACa_Net(nn.Module):
         
         out_obs_enc = self.obs_model.encoder(input, obs_encoder_state)
 
-        input_deep =  input
+        input_deep =  out_obs_enc[self.obs_pad:]
         deep_g_encoder_state, deep_c_encoder_state, deep_controller_state = self.deep_model.initialize_hidden_states(input_deep)
         
         self.deep_model.g_posterior_mean, self.deep_model.g_posterior_logvar, out_deep_g_enc, out_deep_c_enc = self.deep_model.encoder(input_deep, (deep_g_encoder_state, deep_c_encoder_state))
@@ -146,17 +150,20 @@ class VaLPACa_Net(nn.Module):
             if self.deep_c_encoder_size > 0 and self.deep_controller_size > 0 and self.deep_u_latent_size > 0:
 
                 deep_u_mean, deep_u_logvar, deep_controller_state = self.deep_model.controller(torch.cat((out_deep_c_enc[t], factor_state), dim=1), deep_controller_state)
+#                 pdb.set_trace()
 
                 self.deep_model.u_posterior_mean = torch.cat((self.deep_model.u_posterior_mean, deep_u_mean.unsqueeze(1)), dim=1)
                 self.deep_model.u_posterior_logvar = torch.cat((self.deep_model.u_posterior_logvar, deep_u_logvar.unsqueeze(1)), dim=1)
 
                 deep_generator_input = self.deep_model.sample_gaussian(deep_u_mean, deep_u_logvar)
+#                 pdb.set_trace()
                 deep_gen_inputs = torch.cat((deep_gen_inputs, deep_generator_input.unsqueeze(0)), dim=0)
             else:
                 deep_generator_input = torch.empty(self.batch_size, self.deep_u_latent_size, device=self.device)
                 deep_gen_inputs = None
             
             obs_u_mean, obs_u_logvar, obs_controller_state = self.obs_model.controller(torch.cat((out_obs_enc[self.obs_pad+t], obs_state), dim=1), obs_controller_state)
+#             pdb.set_trace()
             self.obs_model.u_posterior_mean   = torch.cat((self.obs_model.u_posterior_mean, obs_u_mean.unsqueeze(1)), dim=1)
             self.obs_model.u_posterior_logvar = torch.cat((self.obs_model.u_posterior_logvar, obs_u_logvar.unsqueeze(1)), dim=1)
             
@@ -168,6 +175,7 @@ class VaLPACa_Net(nn.Module):
             
             obs_state, spike_state = self.obs_model.generator(torch.cat((obs_generator_state, factor_state), dim=1), obs_state)
             
+#             pdb.set_trace()
             obs = torch.cat((obs, obs_state.unsqueeze(0)), dim=0)
             spikes = torch.cat((spikes, spike_state.unsqueeze(0)), dim=0)
             
@@ -257,11 +265,11 @@ class Calcium_Net(nn.Module):
                                                dropout= dropout)
 
         
-        self.controller      = LFADS_ControllerCell(input_size      = self.encoder_size*2 + self.input_size,
-                                                         controller_size = self.controller_size,
-                                                         u_latent_size   = self.u_latent_size,
-                                                         clip_val        = self.clip_val,
-                                                         dropout         = dropout)
+        self.controller      = lfads.LFADS_ControllerCell(input_size      = self.encoder_size*2 + self.input_size,
+                                                          controller_size = self.controller_size,
+                                                          u_latent_size   = self.u_latent_size,
+                                                          clip_val        = self.clip_val,
+                                                          dropout         = dropout)
         
         self.generator       = Calcium_Generator(input_size  = self.u_latent_size + self.factor_size,
                                                  output_size = self.input_size,
@@ -284,12 +292,11 @@ class Calcium_Net(nn.Module):
         pass
         
     def kl_div(self):
-        kl = kldiv_gaussian_gaussian(post_mu  = self.u_posterior_mean,
-                                     post_lv  = self.u_posterior_logvar,
-                                     prior_mu = self.u_prior_mean,
-                                     prior_lv = self.u_prior_logvar)
+        kl = objective.kldiv_gaussian_gaussian(post_mu  = self.u_posterior_mean,
+                                               post_lv  = self.u_posterior_logvar,
+                                               prior_mu = self.u_prior_mean,
+                                               prior_lv = self.u_prior_logvar)
         return kl
-
     #------------------------------------------------------------------------------
     #------------------------------------------------------------------------------
     
@@ -414,6 +421,7 @@ class Spike_Generator(nn.Module):
         self.device      = device
     
     def forward(self, input):
+#         pdb.set_trace()
         return torch.clamp(self.fc_logspike(self.dropout(input)).exp() - 1, min=0.0)
     
 class AR1_Calcium(nn.Module):
@@ -433,8 +441,14 @@ class AR1_Calcium(nn.Module):
         self.logvar = value_to_tensor(log(parameters['var']['value']), parameters['var']['learnable'], device=device)
         tau = value_to_tensor(parameters['tau']['value'], parameters['tau']['learnable'], device=device)
         self.damp = torch.clamp((tau - 1)/tau, min=0.0)
+    
+#         self.gain   = nn.Parameter(torch.tensor(parameters['gain']['value'], device=device, dtype=torch.float32)) if parameters['gain'] ['learnable'] else torch.tensor(parameters['gain']['value'], device=device, dtype=torch.float32)
+#         self.bias   = nn.Parameter(torch.tensor(parameters['bias']['value'], device=device, dtype=torch.float32)) if parameters['bias']['learnable'] else torch.tensor(parameters['bias']['value'], device=device, dtype=torch.float32)
+#         self.logtau = nn.Parameter(torch.tensor(log(parameters['tau']['value']), device=device, dtype=torch.float32)) if parameters['tau']['learnable'] else torch.tensor(log(parameters['tau']['value']), device=device, dtype=torch.float32)
+#         self.logvar = nn.Parameter(torch.tensor(log(parameters['var']['value']), device=device, dtype=torch.float32)) if parameters['var']['learnable'] else torch.tensor(log(parameters['var']['value']), device=device, dtype=torch.float32)
 
     def forward(self, input, hidden):
+#         pdb.set_trace()
         return hidden * self.damp + self.gain * input + self.bias
 
 def value_to_tensor(value, learnable, device, dtype=torch.float32):

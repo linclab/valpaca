@@ -1,9 +1,13 @@
-import numpy as np
-import oasis
 import argparse
 import os
+import sys
 
-from utils import read_data, write_data
+import numpy as np
+import oasis
+
+sys.path.extend(['.', '..'])
+from utils import utils
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-d', '--data_path', type=str)
@@ -24,7 +28,7 @@ def main():
     else:
         dir_name = args.output
     
-    data_dict = read_data(args.data_path)
+    data_dict = utils.read_data(args.data_path)
     dt = data_dict['dt']
     g = np.exp(-dt/args.tau)
     
@@ -117,7 +121,7 @@ def main():
     arg_string += '_z' if args.undo_train_test_split else ''
     arg_string += '_n' if args.normalize else ''
     
-    write_data(os.path.join(dir_name, data_name + '_%s'%args.data_suffix + arg_string), data_dict)
+    utils.write_data(os.path.join(dir_name, data_name + '_%s'%args.data_suffix + arg_string), data_dict)
 
 def deconvolve_calcium_known(X, g=0.9, s_min=0.5):
     S = np.zeros_like(X)

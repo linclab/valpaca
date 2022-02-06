@@ -1,7 +1,7 @@
+from math import log
+
 import torch
 import torch.nn as nn
-import pdb
-from math import log
 
 class Base_Loss(nn.Module):
     def __init__(self, loss_weight_dict, l2_gen_scale=0.0, l2_con_scale=0.0):

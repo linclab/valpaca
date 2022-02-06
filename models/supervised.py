@@ -1,10 +1,10 @@
-import torch
-import torch.nn as nn
-import torchvision
-import numpy as np
-from sklearn.preprocessing import OneHotEncoder
 import time
 import os
+
+import torch
+import torch.nn as nn
+import numpy as np
+from sklearn.preprocessing import OneHotEncoder
 
 ##--------GENERIC SUPERVISED NET--------##
 

@@ -1,10 +1,12 @@
+import os
+import sys
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-import pdb
-import os
 
-from utils import batchify_random_sample
+sys.path.extend(['.', '..'])
+from utils import utils
 
 class Plotter(object):
     def __init__(self, time, truth=None, base_fontsize=14):
@@ -44,7 +46,7 @@ class Plotter(object):
         
         data = dl.dataset.tensors[0]
         
-        batch_example, ix = batchify_random_sample(data=data, batch_size=num_average, ix=ix)
+        batch_example, ix = utils.batchify_random_sample(data=data, batch_size=num_average, ix=ix)
         batch_example = batch_example.to(model.device)
         figs_dict['ix'] = ix
         

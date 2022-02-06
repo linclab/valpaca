@@ -1,10 +1,12 @@
+from math import log
+import sys
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from objective import kldiv_gaussian_gaussian
-from rnn import LFADS_GenGRUCell
-from math import log
-import pdb
+
+sys.path.extend(['.', '..'])
+from models import objective, rnn
 
 class LFADS_Net(nn.Module):
     '''
@@ -277,15 +279,17 @@ class LFADS_Net(nn.Module):
         return optimizer, scheduler
     
     def kl_div(self):
-        kl = kldiv_gaussian_gaussian(post_mu  = self.g_posterior_mean,
-                                     post_lv  = self.g_posterior_logvar,
-                                     prior_mu = self.g_prior_mean,
-                                     prior_lv = self.g_prior_logvar)
+        kl = objective.kldiv_gaussian_gaussian(
+            post_mu  = self.g_posterior_mean,
+            post_lv  = self.g_posterior_logvar,
+            prior_mu = self.g_prior_mean,
+            prior_lv = self.g_prior_logvar)
         if self.u_latent_size > 0:
-            kl += kldiv_gaussian_gaussian(post_mu  = self.u_posterior_mean,
-                                          post_lv  = self.u_posterior_logvar,
-                                          prior_mu = self.u_prior_mean,
-                                          prior_lv = self.u_prior_logvar)
+            kl += objective.kldiv_gaussian_gaussian(
+                post_mu  = self.u_posterior_mean,
+                post_lv  = self.u_posterior_logvar,
+                prior_mu = self.u_prior_mean,
+                prior_lv = self.u_prior_logvar)
         return kl
     
 class LFADS_SingleSession_Net(LFADS_Net):
@@ -447,7 +451,7 @@ class LFADS_ControllerCell(nn.Module):
         
         self.dropout = nn.Dropout(dropout)
         
-        self.gru_controller  = LFADS_GenGRUCell(input_size  = self.input_size, hidden_size = self.controller_size)
+        self.gru_controller  = rnn.LFADS_GenGRUCell(input_size  = self.input_size, hidden_size = self.controller_size)
         self.fc_u_theta = nn.Linear(in_features = self.controller_size, out_features=self.u_latent_size * 2)
         
     def forward(self, input, hidden):
@@ -468,7 +472,7 @@ class LFADS_GeneratorCell(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.clip_val = clip_val
         
-        self.gru_generator = LFADS_GenGRUCell(input_size=input_size, hidden_size=generator_size)
+        self.gru_generator = rnn.LFADS_GenGRUCell(input_size=input_size, hidden_size=generator_size)
         self.fc_factors = nn.Linear(in_features=generator_size, out_features=factor_size, bias=factor_bias)
         
     def forward(self, input, hidden):

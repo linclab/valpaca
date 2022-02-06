@@ -5,17 +5,16 @@ import os
 import pickle
 import yaml
 
-import torch
 import numpy as np
+import torch
 
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('agg')
 
-from utils import write_data, read_data, load_parameters, batchify_sample
+from utils import utils
 from train_model import prep_model
-import pdb
 
 parser = argparse.ArgumentParser()
 
@@ -37,9 +36,9 @@ def main():
             "to start with the name of the model, e.g. ../MODELNAME/sub_direc.")
     
     hp_path = os.path.join(args.model_dir, 'hyperparameters.yaml')
-    hyperparams = load_parameters(hp_path)
+    hyperparams = utils.load_parameters(hp_path)
     
-    data_dict = read_data(args.data_path)
+    data_dict = utils.read_data(args.data_path)
     
     # Re-instantiate model
     train_dl, valid_dl, plotter, model, objective = prep_model(model_name  = model_name,
@@ -188,7 +187,7 @@ def main():
     yaml.dump(results_dict, open(os.path.join(args.model_dir, 'results.yaml'), 'w'), default_flow_style=False)
     
 def infer_and_recon(sample, batch_size, model):
-    batch = batchify_sample(sample, batch_size)
+    batch = utils.batchify_sample(sample, batch_size)
     recon, (factors, inputs) = model(batch)
     result = {}
     result['latent'] = factors.mean(dim=1).cpu().numpy()

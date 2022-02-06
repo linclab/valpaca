@@ -1,10 +1,14 @@
 #!/usr/bin/env python
 
-from synthetic_data import SyntheticCalciumDataGenerator
-from utils import write_data
 import argparse
-import yaml
 import os
+import sys
+
+import yaml
+
+sys.path.extend(['.', '..'])
+from data import synthetic_data
+from utils import utils
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-o', '--output', default='./', type=str)
@@ -52,18 +56,19 @@ def main():
 
         # generate data
 
-        generator = SyntheticCalciumDataGenerator(system     = net,
-                                                  seed       = args.seed,
-                                                  trainp     = args.trainp,
-                                                  burn_steps = args.burn_steps,
-                                                  num_steps  = args.steps,
-                                                  num_trials = args.trials,
-                                                  tau_cal    = 0.3,
-                                                  dt_cal     = args.dt_spike,
-                                                  n          = 2.0,
-                                                  A          = 1.0,
-                                                  gamma      = 0.01,
-                                                  sigma      = args.sigma)
+        generator = synthetic_data.SyntheticCalciumDataGenerator(
+            system     = net,
+            seed       = args.seed,
+            trainp     = args.trainp,
+            burn_steps = args.burn_steps,
+            num_steps  = args.steps,
+            num_trials = args.trials,
+            tau_cal    = 0.3,
+            dt_cal     = args.dt_spike,
+            n          = 2.0,
+            A          = 1.0,
+            gamma      = 0.01,
+            sigma      = args.sigma)
 
         data_dict = generator.generate_dataset()
         # save
@@ -74,12 +79,12 @@ def main():
                                                                      str(args.dt_spike),
                                                                      str(args.sigma),
                                                                      str(args.rate_scale)), flush=True)
-        write_data('%s/lorenz_seed%s_sys%s_cal%s_sig%s_base%s'%(args.output,
-                                                                str(args.seed),
-                                                                str(args.dt_sys),
-                                                                str(args.dt_spike),
-                                                                str(args.sigma),
-                                                                str(args.rate_scale)), data_dict)
+        utils.write_data('%s/lorenz_seed%s_sys%s_cal%s_sig%s_base%s'%(args.output,
+                                                                      str(args.seed),
+                                                                      str(args.dt_sys),
+                                                                      str(args.dt_spike),
+                                                                      str(args.sigma),
+                                                                      str(args.rate_scale)), data_dict)
     
 if __name__ == '__main__':
     main()

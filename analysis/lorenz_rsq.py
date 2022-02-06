@@ -1,4 +1,6 @@
-import h5py
+#!/usr/bin/env python
+
+import argparse
 import os
 import yaml
 import pickle
@@ -9,13 +11,12 @@ from scipy.stats import ttest_rel
 
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')
+matplotlib.use('agg')
 
 import sys
 sys.path.append('../')
-from utils import read_data
+from utils import utils
 
-import argparse
 
 linclab_red = '#e84924ff'  # ground-truth
 linclab_blue = '#37a1d0ff' # reconstructed
@@ -143,8 +144,8 @@ def main():
     oasis_hill_filename = '/'.join((model_dir, hill_name, oasis_name, lfads_model_desc, base_name))
     valpa_hill_filename = '/'.join((model_dir, hill_name, valpa_name, valpa_model_desc, base_name))
     
-    data_ar1_dict = read_data('../synth_data/%s'%data_ar1_name)
-    data_hill_dict = read_data('../synth_data/%s'%data_hill_name)
+    data_ar1_dict = utils.read_data('../synth_data/%s'%data_ar1_name)
+    data_hill_dict = utils.read_data('../synth_data/%s'%data_hill_name)
 #     import pdb; pdb.set_trace()
     
     oasis_ar1_latent_dict = pickle.load(open(oasis_ar1_filename, 'rb'))

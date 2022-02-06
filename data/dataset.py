@@ -1,5 +1,4 @@
 import torch
-import torchvision
 from torch.utils.data.dataloader import _DataLoaderIter
 
 class LFADS_MultiSession_Dataset(torch.utils.data.Dataset):

@@ -1,10 +1,11 @@
-import h5py
 import os
+
+import h5py
 import json
 import numpy as np
 import pickle
-import yaml
 import torch
+import yaml
 
 def write_data(data_fname, data_dict, use_json=False, compression=None):
     """Write data in HD5F format.
@@ -117,4 +118,15 @@ def load_latent(model_dir):
     with open(latent_filename, 'rb') as f:
         latent_dict = pickle.load(f)
     return latent_dict
+
+
+def seed_all(seed):
+
+    if seed is not None:
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True)
+        os.environ['CUBLAS_WORKSPACE_CONFIG'] = ':4096:8' # for cuda > 10.2
 

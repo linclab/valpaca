@@ -1,16 +1,18 @@
+#!/usr/bin/env python
+
 import argparse
 import copy
 from pathlib import Path
 import sys
-import warnings
 
-
+import matplotlib
 import numpy as np
 import torch
-
 import matplotlib.pyplot as plt
 from matplotlib.collections import PolyCollection
 from mpl_toolkits.mplot3d import Axes3D # for 3D plotting
+from scipy.signal import savgol_filter
+matplotlib.use('agg')
 
 from sklearn.model_selection import train_test_split, StratifiedShuffleSplit, \
     RandomizedSearchCV
@@ -18,15 +20,13 @@ from sklearn.utils.fixes import loguniform
 import sklearn.metrics as metrics
 from sklearn.decomposition import PCA
 from sklearn.linear_model import RidgeCV, LogisticRegression
-from sklearn.preprocessing import StandardScaler, FunctionTransformer
+from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 from sklearn.pipeline import make_pipeline
 
-from scipy.signal import savgol_filter
-
 sys.path.extend(['.', '..'])
-import utils
-from supervised import Supervised_BiRecurrent_Net
+from utils import utils
+from models import supervised
 
 
 ##--------HYPERPARAMETERS--------##
@@ -60,9 +60,9 @@ MODEL_KWARGS = {
 
 FIT_KWARGS = {
     'batch_size': 68,
-    'learning_rate': 0.00005,
+    'learning_rate': 5e-5,
     'pos_weight': None,
-    'print_freq': 250,
+    'print_freq': 200,
     'max_epochs': 5000,
     'max_iter': 1,
     'save_loc': '.'
@@ -96,12 +96,16 @@ def main(args):
         )
 
     # run decoders
-    run_decoders(
-        data_dict, latent_dict, args.model_dir, run_logreg=args.run_logreg, 
-        run_svm=args.run_svm, run_nl_decoder=args.nl_decoder, 
-        num_runs=args.num_runs, seed=args.seed, log_scores=True
-        )
-    
+    for scale in [True, False]:
+        scale_str = "scaling" if scale else "no scaling"
+        print(f"\nDecoders: {scale_str}")
+        run_decoders(
+            data_dict, latent_dict, args.model_dir, run_logreg=args.run_logreg, 
+            run_svm=args.run_svm, run_nl_decoder=args.run_nl_decoder, 
+            num_runs=args.num_runs, seed=args.seed, scale=scale, 
+            log_scores=True
+            )
+
 
 ##--------GENERAL FUNCTIONS--------##
 #############################################
@@ -139,30 +143,19 @@ def load_trial_data(data_dict, latent_dict=None):
     return data, unexp, ori
 
 
-#############################################
-def seed_all(seed):
-
-    if seed is None:
-        return
-
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-
-
 ##--------DECODER FUNCTIONS--------##
 #############################################
 def run_decoders(data_dict, latent_dict, savedir, run_logreg=True, 
                  run_svm=True, run_nl_decoder=False, num_runs=10, scale=True, 
                  seed=None, log_scores=True):
 
-    decoder_kwargs = {
-        'X_train'   : latent_dict['train']['latent'],
-        'y_train'   : data_dict['train_unexp'].astype('int'),
-        'X_test'    : latent_dict['valid']['latent'],
-        'y_test'    : data_dict['valid_unexp'].astype('int'),
-        'scale'     : scale,
-    }
+    X_train = latent_dict['train']['latent']
+    X_test = latent_dict['valid']['latent']
+    X = np.concatenate([X_train, X_test], axis=0)
+
+    y_train = data_dict['train_unexp'].astype('int')
+    y_test = data_dict['valid_unexp'].astype('int')
+    y = np.concatenate([y_train, y_test], axis=0)
 
     Path(savedir).mkdir(parents=True, exist_ok=True)
 
@@ -170,8 +163,8 @@ def run_decoders(data_dict, latent_dict, savedir, run_logreg=True,
         if log_scores:
             print("\nLogistic regression scores:")
         logreg_scores = perform_decoder_runs(
-            logreg_eval, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, **decoder_kwargs
+            logreg_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
+            log_scores=log_scores, scale=scale
             )
         np.save(Path(savedir, 'logreg_decoder_scores'), logreg_scores)
 
@@ -179,8 +172,8 @@ def run_decoders(data_dict, latent_dict, savedir, run_logreg=True,
         if log_scores:
             print("\nRBF SVM scores:")
         logreg_scores = perform_decoder_runs(
-            rbf_svm_eval, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, **decoder_kwargs
+            rbf_svm_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
+            log_scores=log_scores, scale=scale
             )
         np.save(Path(savedir, 'rbf_svm_scores'), logreg_scores)
 
@@ -188,34 +181,52 @@ def run_decoders(data_dict, latent_dict, savedir, run_logreg=True,
         if log_scores:
             print("\nNon-linear decoder scores:")
 
-        nl_decoder_kwargs = copy.deepcopy(decoder_kwargs)
+        decoder_kwargs = dict()
 
         model_kwargs = copy.deepcopy(MODEL_KWARGS)
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
         model_kwargs['device'] = device
-        nl_decoder_kwargs['model_kwargs'] = model_kwargs
 
         fit_kwargs = copy.deepcopy(FIT_KWARGS)
         fit_kwargs['save_loc'] = savedir
-        nl_decoder_kwargs['fit_kwargs'] = fit_kwargs
 
-        nl_dec_scores = perform_decoder_runs(
-            recurrent_net_eval, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, **nl_decoder_kwargs
+        decoder_kwargs = {
+            'scale'       : scale,
+            'model_kwargs': model_kwargs,
+            'fit_kwargs'  : fit_kwargs,
+        }
+
+        nl_decoder_scores = perform_decoder_runs(
+            recurrent_net_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
+            log_scores=log_scores, **decoder_kwargs
             )
 
-        np.save(Path(savedir, 'non_linear_decoder_scores'), nl_dec_scores)
+        np.save(Path(savedir, 'non_linear_decoder_scores'), nl_decoder_scores)
 
 
 #############################################
-def perform_decoder_runs(decoder_fct, num_runs=10, seed=None, log_scores=True, 
-                         **decoder_kwargs):
+def perform_decoder_runs(decoder_fct, X, y, num_runs=10, seed=None, 
+                         log_scores=True, train_p=TRAIN_P, **decoder_kwargs):
 
-    seed_all(seed)
+    utils.seed_all(seed)
+
+    sub_seeds = [np.random.choice(int(2e5)) for _ in range(num_runs)]
 
     scores = []
     for i in range(num_runs):
-        sub_seed = np.random.choice(int(2e5))
+        sub_seed = sub_seeds[0]
+
+        # get a new split
+        train_data, test_data = train_test_split(
+            list(zip(X, y)), train_size=train_p, stratify=y, 
+            random_state=sub_seed,
+            )
+
+        decoder_kwargs['X_train'] = np.asarray(list(zip(*train_data))[0])
+        decoder_kwargs['y_train'] = np.asarray(list(zip(*train_data))[1])
+        decoder_kwargs['X_test'] = np.asarray(list(zip(*test_data))[0])
+        decoder_kwargs['y_test'] = np.asarray(list(zip(*test_data))[1])
+
         run_score = decoder_fct(seed=sub_seed, **decoder_kwargs)
         scores.append(run_score)
 
@@ -223,7 +234,7 @@ def perform_decoder_runs(decoder_fct, num_runs=10, seed=None, log_scores=True,
             score_mean = np.mean(scores)
             score_sem = np.std(scores) / np.sqrt(i+1)
 
-            running_score_str = u'running score {:.3f} {} {:.3f}'.format(
+            running_score_str = u'running score: {:.3f} {} {:.3f}'.format(
                 score_mean, PLUS_MIN, score_sem
                 )
             score_str = u'n={}, score: {:.3f}, {}'.format(
@@ -235,7 +246,7 @@ def perform_decoder_runs(decoder_fct, num_runs=10, seed=None, log_scores=True,
 
 #############################################
 def logreg_eval(X_train, y_train, X_test, y_test, scale=True, seed=None, 
-                log_params=True):
+                grid_search=False, log_params=True):
 
     # reshape data
     X_train = X_train.reshape(len(X_train), -1)
@@ -243,66 +254,75 @@ def logreg_eval(X_train, y_train, X_test, y_test, scale=True, seed=None,
 
     # initialize pipeline
     model = LogisticRegression(
-        class_weight='balanced', random_state=seed, solver='lbfgs', 
-        max_iter=1000, fit_intercept=True
+        C=1, class_weight='balanced', random_state=seed, solver='lbfgs', 
+        penalty='l2', max_iter=1000, fit_intercept=True
         )
     scale_steps = [StandardScaler()] if scale else []
     pipeline = make_pipeline(*scale_steps, model)
 
-    # fit with cross-validation and grid search
-    cv = StratifiedShuffleSplit(n_splits=5, test_size=0.2, random_state=seed)
-    param_dist = {'logisticregression__C': loguniform(1e-2, 1e2)}
-    n_grid_iter = 20 * len(param_dist) # partial scaling with num of grid dims
-    grid = RandomizedSearchCV(
-        pipeline, param_distributions=param_dist, 
-        cv=cv, n_iter=n_grid_iter, n_jobs=-1
-        )
-    grid.fit(X_train, y_train)
+    # select parameters with cross-validation grid search
+    if grid_search:
+        cv = StratifiedShuffleSplit(n_splits=5, test_size=0.2, random_state=seed)
+        param_dist = {'logisticregression__C': loguniform(1e-2, 1e2)}
+        n_grid_iter = 20 * len(param_dist) # scaling partially by # of grid dims
+        pipeline = RandomizedSearchCV(
+            pipeline, param_distributions=param_dist, 
+            cv=cv, n_iter=n_grid_iter, random_state=seed, n_jobs=-1
+            )
+    
+    pipeline.fit(X_train, y_train)
 
-    if log_params:
+    if grid_search and log_params:
         param_str = '\n    '.join(
-            [f'{k}: {v}' for k, v in grid.best_params_.items()]
+            [f'{k}: {v}' for k, v in pipeline.best_params_.items()]
             )
         print(f'best parameters (logreg):\n    {param_str}')
 
     # predict on the held out test set
-    score = balanced_accuracy_score(y_test, grid.predict(X_test))
+    score = metrics.balanced_accuracy_score(y_test, pipeline.predict(X_test))
 
     return score
 
 
 #############################################
 def rbf_svm_eval(X_train, y_train, X_test, y_test, scale=True, seed=None, 
-                log_params=True):
+                 grid_search=False, log_params=True):
 
     # reshape data
     X_train = X_train.reshape(len(X_train), -1)
     X_test = X_test.reshape(len(X_test), -1)
 
     # initialize pipeline
-    model = SVC(class_weight='balanced', random_state=seed)
+    model = SVC(
+        C=1, gamma='scale', class_weight='balanced', kernel='rbf', 
+        random_state=seed
+        )
     scale_steps = [StandardScaler()] if scale else []
     pipeline = make_pipeline(*scale_steps, model)
 
-    # fit with cross-validation and grid search
-    cv = StratifiedShuffleSplit(n_splits=5, test_size=0.2, random_state=seed)
-    param_dist = {'svc__C': loguniform(1e-2, 1e10),
-                  'svc__gamma': loguniform(1e-9, 1e2)}
-    n_grid_iter = 20 * len(param_dist) # partial scaling with num of grid dims
-    grid = RandomizedSearchCV(
-        pipeline, param_distributions=param_dist, 
-        cv=cv, n_iter=n_grid_iter, n_jobs=-1
-        )
-    grid.fit(X_train, y_train)
+    # select parameters with cross-validation grid search
+    if grid_search:
+        cv = StratifiedShuffleSplit(
+            n_splits=5, test_size=0.2, random_state=seed
+            )
+        param_dist = {'svc__C': loguniform(1e-2, 1e10),
+                      'svc__gamma': loguniform(1e-9, 1e2)}
+        n_grid_iter = 20 * len(param_dist) # scaling partially by # of grid dims
+        pipeline = RandomizedSearchCV(
+            pipeline, param_distributions=param_dist, 
+            cv=cv, n_iter=n_grid_iter, random_state=seed, n_jobs=-1
+            )
 
-    if log_params:
+    pipeline.fit(X_train, y_train)
+
+    if grid_search and log_params:
         param_str = '\n    '.join(
-            [f'{k}: {v}' for k, v in grid.best_params_.items()]
+            [f'{k}: {v}' for k, v in pipeline.best_params_.items()]
             )
         print(f'best parameters (rbf SVM):\n    {param_str}')
 
     # predict on the held out test set
-    score = balanced_accuracy_score(y_test, grid.predict(X_test))
+    score = metrics.balanced_accuracy_score(y_test, pipeline.predict(X_test))
 
     return score
     
@@ -313,7 +333,8 @@ def recurrent_net_eval(X_train, y_train, X_test, y_test, model_kwargs,
 
     # get a validation set from the training set
     train_data, valid_data = train_test_split(
-        list(zip(X_train, y_train)), train_size=train_p, random_state=seed,
+        list(zip(X_train, y_train)), train_size=train_p, stratify=y_train, 
+        random_state=seed,
         )
 
     X_train, y_train = [np.asarray(data) for data in zip(*train_data)]
@@ -327,7 +348,8 @@ def recurrent_net_eval(X_train, y_train, X_test, y_test, model_kwargs,
             sum(y_train != v) / sum(y_train == v) for v in [0, 1]
             ]
 
-    model = Supervised_BiRecurrent_Net(
+    utils.seed_all(seed)
+    model = supervised.Supervised_BiRecurrent_Net(
         input_size=input_size, dense_size=dense_size, **model_kwargs
         )
     
@@ -336,6 +358,11 @@ def recurrent_net_eval(X_train, y_train, X_test, y_test, model_kwargs,
         X_train = scaler.fit_transform(
             X_train.reshape(len(X_train), -1)
             ).reshape(X_train.shape)
+
+        # apply
+        X_valid = scaler.transform(
+            X_valid.reshape(len(X_valid), -1)
+            ).reshape(X_valid.shape)
 
         X_test = scaler.transform(
             X_test.reshape(len(X_test), -1)
@@ -346,7 +373,9 @@ def recurrent_net_eval(X_train, y_train, X_test, y_test, model_kwargs,
     
     # predict on the held out test set
     y_hat_test = model.predict(X_test)
-    score = balanced_accuracy_score(y_test.squeeze(), y_hat_test.squeeze())
+    score = metrics.balanced_accuracy_score(
+        y_test.squeeze(), y_hat_test.squeeze()
+        )
 
     return score
     
@@ -957,7 +986,7 @@ if __name__ == '__main__':
         help='number of decoders to run per type')
     parser.add_argument('-l', '--run_logreg', action='store_true')
     parser.add_argument('-s', '--run_svm', action='store_true')
-    parser.add_argument('-s', '--run_nl_dec', action='store_true')
+    parser.add_argument('-nl', '--run_nl_decoder', action='store_true')
     parser.add_argument('-p', '--projections', action='store_true')
     parser.add_argument('-r', '--seed', default=100, type=int)
 

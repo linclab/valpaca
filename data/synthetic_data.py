@@ -178,7 +178,7 @@ class SyntheticCalciumDataGenerator():
         return np.random.poisson(rates*dt)
     
     def calcify(self, spikes):
-        return self.calcium_dynamics.integrate(num_steps=num_steps, inputs=spikes)
+        return self.calcium_dynamics.integrate(num_steps=self.num_steps, inputs=spikes)
            
     def train_test_split(self, data):
         num_trials, num_inits, num_steps, num_cells = data.shape
