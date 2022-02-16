@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 
 import argparse
-import os
+import logging
+from pathlib import Path
 import yaml
-import pickle
+import sys
 
 import numpy as np
 import pandas as pd
@@ -11,205 +12,414 @@ from scipy.stats import ttest_rel
 
 import matplotlib.pyplot as plt
 import matplotlib
+from zmq import fd_sockopts
 matplotlib.use('agg')
 
-import sys
-sys.path.append('../')
+sys.path.append('..')
 from utils import utils
 
 
-linclab_red = '#e84924ff'  # ground-truth
-linclab_blue = '#37a1d0ff' # reconstructed
-linclab_grey = '#969696ff' # other
+COLORS = {
+    'linc_red'  : '#E84924', # ground truth
+    'linc_blue' : '#37A1D0', # reconstructed
+    'linc_grey' : '#969696', # other
+}
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--dt_sys', default=0.1, type=float)
-parser.add_argument('--dt_cal', default=0.1, type=float)
-parser.add_argument('--rate', default=2.0, type=float)
-parser.add_argument('--sigma', default=5.0, type=float)
-parser.add_argument('--model_dir',default='models', type=str )
+SAVE_KWARGS = {
+    'bbox_inches': 'tight',
+    'facecolor'  : 'w',
+    'transparent': False,
+    'format'     : 'svg',
+}
 
-def main():
-    args = parser.parse_args()
-    sys_name = 'lorenz'
+PLUS_MIN = u'\u00B1'
+
+MODEL_DICT = {
+    'lfads'       : 'LFADS',
+    'gauss_ar1'   : 'Linear Gaussian-LFADS',
+    'oasis_ar1'   : 'Linear OASIS+LFADS',
+    'valpaca_ar1' : 'Linear VaLPACa',
+    'gauss_hill'  : 'Nonlinear Gaussian-LFADS',
+    'oasis_hill'  : 'Nonlinear OASIS+LFADS',
+    'valpaca_hill': 'Nonlinear VaLPACa',
+}
+
+DATA_DICT = {
+    'latent_aligned': 'Lorenz state', 
+    'rates'         : 'Firing Rates', 
+    'fluor'         : 'Fluorescence', 
+    'spikes'        : 'Spike Counts',
+    }
+
+CALC_DYN_DICT = {
+    'ar1' : 'AR1',
+    'hill': 'Hill',
+}
+
+MODEL_NAME_DICT = {
+    'lfads'  : 'lfads',
+    'gauss'  : 'lfads-gaussian',
+    'oasis'  : 'lfads_oasis',
+    'valpaca': 'valpaca'
+}
+
+PARAM_NAME_DICT = {
+    'lfads'  : 'cenc0_cont0_fact3_genc64_gene64_glat64_ulat0_hp-',
+    'valpaca': 'dcen0_dcon0_dgen64_dgla64_dula0_fact3_gene64_ocon32_oenc32_olat64_hp-',
+}
+
+RESULTS_FILENAME = 'results.yaml'
+LATENTS_FILENAME = 'latent.pkl'
+DATA_NAME = 'lorenz'
+SEEDS = np.arange(1, 17) * 1000
+TIME = np.linspace(0, 3, 90)
+
+# specific analysis/plotting parameters
+ANALYSIS_MODEL_NAMES = ['oasis', 'valpaca']
+PLOT_SEED = 2000
+
+
+logger = logging.getLogger(__name__)
+
+
+##--------MAIN--------##
+#############################################
+def main(args):
+
+    # set logger to the specified level
+    utils.set_logger_level(logger, level=args.log_level)
     
-    project_dir = '/'.join((os.environ['HOME'], 'valpaca'))
-    model_dir = '/'.join((project_dir, 'models'))
-    
-    s = 1.0/args.sigma
+    seeds = SEEDS
 
-    ou = 'ou_t0.3_s%.1f'%s
+    # get some parameter strings
+    ou_str = get_ou_str(args.sigma)
+    cond_str = get_conditions_str(
+        dt_sys=args.dt_sys, dt_cal=args.dt_cal, sigma=args.sigma, 
+        rate=args.rate
+        )
 
-    lfads_model_desc = 'cenc0_cont0_fact3_genc64_gene64_glat64_ulat0_hp-'
-    valpa_model_desc = 'dcen0_dcon0_dgen64_dgla64_dula0_fact3_gene64_ocon32_oenc32_olat64_hp-'
-    base_name = 'results.yaml'
+    if args.output_dir is None:
+        args.output_dir = args.model_dir
 
-    lfads_name = 'lfads'
-    gauss_name = 'lfads-gaussian'
-    oasis_name = '_'.join((lfads_name, 'oasis'))
-    valpa_name = 'valpaca'
-    
-    ar1  = 'fluor_ar1'
-    hill = 'fluor_hillar1'
-    
-    conditions = 'sys%.4f_cal%.4f_sig%.1f_base%.1f'%(args.dt_sys, args.dt_cal, args.sigma, args.rate)
+    # collect and save RSQ dictionary
+    savepath = Path(args.output_dir, f'{DATA_NAME}_{cond_str}_rsq.yaml')
+    rsq = collect_rsq(
+        cond_str, ou_str, model_dir=args.model_dir, seeds=seeds, 
+        savepath=savepath
+        )
 
-    rsq = {}
-    
-    seeds = range(1000, 17000, 1000)
+    # log t-test results
+    utils.set_logger_level(logger, level="info")
+    run_ttests(rsq, seeds=seeds, model_names=ANALYSIS_MODEL_NAMES)
+    utils.set_logger_level(logger, level=args.log_level)
 
-    for seed in seeds:
-        data_name = '_'.join((sys_name, 'seed'+str(seed), conditions))
-        ar1_name  = '_'.join((data_name, ar1, ou, 'n'))
-        hill_name = '_'.join((data_name, hill, ou, 'n'))
-        
-        lfads_filename = '/'.join((model_dir, ar1_name, lfads_name, lfads_model_desc, base_name))
-        
-        gauss_ar1_filename = '/'.join((model_dir, ar1_name, gauss_name, lfads_model_desc, base_name))
-        oasis_ar1_filename = '/'.join((model_dir, ar1_name, oasis_name, lfads_model_desc, base_name))
-        valpa_ar1_filename = '/'.join((model_dir, ar1_name, valpa_name, valpa_model_desc, base_name))
-        
-        gauss_hill_filename = '/'.join((model_dir, hill_name, gauss_name, lfads_model_desc, base_name))
-        oasis_hill_filename = '/'.join((model_dir, hill_name, oasis_name, lfads_model_desc, base_name))
-        valpa_hill_filename = '/'.join((model_dir, hill_name, valpa_name, valpa_model_desc, base_name))
+    # compile and save statistics
+    savepath = f'{DATA_NAME}_{cond_str}_rsq.tex'
+    compile_df(rsq, savepath=savepath)
 
-        print(seed)
-        
-        for filename, column in zip([lfads_filename, gauss_ar1_filename, oasis_ar1_filename, valpa_ar1_filename, gauss_hill_filename, oasis_hill_filename, valpa_hill_filename], 
-                                     ['lfads', 'gauss_ar1', 'oasis_ar1', 'valpaca_ar1', 'gauss_hill','oasis_hill', 'valpaca_hill']):
-            if os.path.exists(filename):
-                myfile = open(filename, 'rb')
-                results = yaml.load(myfile, Loader=yaml.Loader)
-                myfile.close()
-                if column not in rsq.keys():
-                    rsq[column] = {}
-                for key in results['valid'].keys():
-                    if key not in rsq[column].keys():
-                        rsq[column][key] = {}
-                    rsq[column][key][seed] = results['valid'][key]['rsq']
-#                     print(rsq[column][key][seed])
-            else:
-                print('%s does not exist'%filename)
+    # plot results
+    Path(args.output_dir).mkdir(exist_ok=True, parents=True)
+    for model in ANALYSIS_MODEL_NAMES:
+        for calc_dyn in CALC_DYN_DICT.keys():
+            latent_dict = utils.load_latent(args.model_dir)
+
+            latent_path = get_model_filepath(
+                cond_str, ou_str, model_dir=args.model_dir, model=model, 
+                calc_dyn=calc_dyn, seed=PLOT_SEED, filetype='latents')
             
-    yaml.dump(rsq, open('./%s_%s_rsq.yaml'%(sys_name, conditions), 'w'))
+            latent_dict = utils.load_latent(latent_path)
+
+            data_dict = get_data_dict(args.data_dir, calc_dyn=calc_dyn)
+
+            fig = plot_lorenz_examples(
+                latent_dict=latent_dict, data_dict=data_dict, calc_dyn=calc_dyn
+                )
+
+            savepath = Path(
+                args.output_dir, 
+                f'lorenz_examples_{model}_{calc_dyn}_{DATA_NAME}_{cond_str}.svg'
+                )
+            fig.savefig(savepath, **SAVE_KWARGS)
+
+
+##--------ANALYSIS FUNCTIONS--------##
+#############################################
+def collect_rsq(conditions_str, ou_str, model_dir='.', seeds=SEEDS, 
+                savepath=None):
+
+    logger.info("Collecting RSQ")
+
+    rsq = dict()
+    for seed in seeds:
+        logger.debug(f'R-squared results')        
+        logger.info(f'Seed: {seed}')
+
+        for model in MODEL_NAME_DICT.keys():
+            for calc_dyn in CALC_DYN_DICT.keys():                
+                filepath, model_name = get_model_filepath(
+                    conditions_str, ou_str, model_dir=model_dir, model=model, 
+                    calc_dyn=calc_dyn, seed=seed, filetype='results'
+                    )
+
+            if Path(filepath).is_file():
+                with open(filepath, 'rb') as f:
+                    results = yaml.load(f, Loader=yaml.Loader)
+
+                if model_name not in rsq.keys():
+                    rsq[model_name] = dict()
+                    
+                for key in results['valid'].keys():
+                    if key not in rsq[model_name].keys():
+                        rsq[model_name][key] = dict()
+                    rsq[model_name][key][seed] = results['valid'][key]['rsq']
+                    logger.debug(
+                        f'{model_name}, {key} {seed} '
+                        f'{rsq[model_name][key][seed]}'
+                        )
+            else:
+                logger.info(f'{filepath} skipped, as it does not exist.')
     
-    print('AR1 t-test')
-    for var in ['latent_aligned', 'spikes', 'rates', 'fluor']:
-        a = [rsq['oasis_ar1'][var][s] for s in seeds]
-        b = [rsq['valpaca_ar1'][var][s] for s in seeds]
-        t, p = ttest_rel(a=a, b=b)
-        print('%s: t_%i=%.3f, p=%.3f'%(var, len(seeds)-1, t, p)) 
+    if len(rsq) == 0:
+        raise RuntimeError("No data was found.")
+    
+    if savepath is not None:
+        Path(savepath).parent.mkdir(exist_ok=True, parents=True)
+        with open(savepath, 'w+') as f:
+            yaml.dump(rsq, f)
+
+    return rsq
+
+
+#############################################
+def run_ttests(rsq, seeds=SEEDS, model_names=['oasis', 'valpaca']):
+
+    if len(model_names) != 2:
+        raise ValueError('Must provide exactly 2 model names for comparison.')
+    model_1, model_2 = model_names
+
+    for calc_dyn in CALC_DYN_DICT.keys():
+        logger.info(f'{CALC_DYN_DICT[calc_dyn]} t-test')
+        for data_type in DATA_DICT.keys():
+            a = [rsq[f'{model_1}_{calc_dyn}'][data_type][s] for s in seeds]
+            b = [rsq[f'{model_2}_{calc_dyn}'][data_type][s] for s in seeds]
+            t, p = ttest_rel(a=a, b=b)
+            logger.info(f'{data_type}: t_{len(seeds) - 1}={t:.3f}, p={p:.3f}') 
+
+
+#############################################
+def compile_df(rsq, savepath=None):
+
+    model_names = sorted(list(rsq.keys()))
+    
+    df_mean = pd.DataFrame(
+        [pd.DataFrame(rsq[model_name]).mean() for model_name in model_names], 
+        index=model_names
+        )
+    df_std  = pd.DataFrame(
+        [pd.DataFrame(rsq[model_name]).std() for model_name in model_names], 
+        index=model_names
+        )
+
+    # combine statistic dataframes     
+    df = df_mean.round(3) + PLUS_MIN + (df_std / np.sqrt(20)).round(3)
+    
+    df = df.reindex(axis=1, labels=DATA_DICT.keys())
+    df = df.reindex(axis=0, labels=model_names)
+
+    df = df.rename(index=MODEL_DICT.keys(), columns=DATA_DICT.keys())
+    
+    if savepath is not None:
+        Path(savepath).parent.mkdir(exist_ok=True, parents=True)
+        with open(savepath, 'w+') as f:
+            df.to_latex(f)
+
+    return df
+    
+
+##--------DATA AND PATH FUNCTIONS--------##
+#############################################
+def get_model_filepath(conditions_str, ou_str, model_dir='.', model='valpaca', 
+                       calc_dyn='ar1', seed=1000, filetype='results'):
+
+    if calc_dyn not in ['ar1', 'hill']:
+        raise ValueError('calc_dyn must be either \'ar1\' or \'hill\'.')
+
+    calc_dyn_str = 'fluor_ar1' if calc_dyn == 'ar1' else 'fluor_hill'
+    data_name = f'{DATA_NAME}_seed{seed}_{conditions_str}'
+    calc_dyn_name = f'{data_name}_{calc_dyn_str}_{ou_str}_n'
+
+    if model not in MODEL_NAME_DICT.keys():
+        model_keys = list(MODEL_NAME_DICT.keys())
+        raise ValueError('model must be in {}.'.format(', '.join(model_keys)))
         
-    print('Hill t-test')
-    for var in ['latent_aligned', 'spikes', 'rates', 'fluor']:
-        a = [rsq['oasis_hill'][var][s] for s in seeds]
-        b = [rsq['valpaca_hill'][var][s] for s in seeds]
-        t, p = ttest_rel(a=a, b=b)
-        print('%s: t_%i=%.3f, p=%.3f'%(var, len(seeds)-1, t, p)) 
-    
-    rows = list(rsq.keys())
-    rows.sort()
-    
-    df_mean = pd.DataFrame([pd.DataFrame(rsq[row]).mean() for row in rows], index=rows)
-    df_std  = pd.DataFrame([pd.DataFrame(rsq[row]).std() for row in rows], index=rows)
-    
-    df = df_mean.round(3).astype(str) + ' $\pm$ ' + (df_std/np.sqrt(20)).round(3).astype(str)
-    
-    df = df.reindex(axis=1, labels=['latent_aligned', 'spikes', 'rates', 'fluor'])
-    df = df.reindex(axis=0, labels=['lfads', 'gauss_ar1', 'oasis_ar1', 'valpaca_ar1', 'gauss_hill','oasis_hill', 'valpaca_hill'])
+    param_model = 'valpaca' if model == 'valpaca' else 'lfads'
 
-    df = df.rename(index={'lfads' : 'LFADS',
-                          'gauss_ar1'   : 'Linear Gaussian-LFADS',
-                          'oasis_ar1'   : 'Linear OASIS+LFADS',
-                          'valpaca_ar1' : 'Linear VaLPACa',
-                          'gauss_hill'   : 'Nonlinear Gaussian-LFADS',
-                          'oasis_hill'   : 'Nonlinear OASIS+LFADS',
-                          'valpaca_hill' : 'Nonlinear VaLPACa'},
-                   columns={'latent_aligned' : 'Lorenz state', 'rates' : 'Firing Rates', 'fluor' : 'Fluorescence', 'spikes': 'Spike Counts'})
-    
-    df.to_latex(open('%s_%s_rsq.tex'%(sys_name, conditions), 'w+'))
-    
-    seed = 2000
-    data_name = '_'.join((sys_name, 'seed'+str(seed), conditions))
-    
-    data_ar1_name = data_name + '_fluor_ar1_ou_t0.3_s%s_n'%('2.0' if args.sigma=='5.0' else '2.0')
-    data_hill_name = data_name + '_fluor_hillar1_ou_t0.3_s%s_n'%('2.0' if args.sigma=='5.0' else '2.0')
-    ar1_name  = '_'.join((data_name, ar1, ou, 'n'))
-    hill_name = '_'.join((data_name, hill, ou, 'n'))
-    
-    base_name = 'latent.pkl'
+    if filetype == 'results':
+        filename = RESULTS_FILENAME
+    elif filetype == 'latents':
+        filename = LATENTS_FILENAME
+    else:
+        raise ValueError('filename should be \'results\' or \'latents\'.')
 
-    oasis_ar1_filename = '/'.join((model_dir, ar1_name, oasis_name, lfads_model_desc, base_name))
-    valpa_ar1_filename = '/'.join((model_dir, ar1_name, valpa_name, valpa_model_desc, base_name))
-    oasis_hill_filename = '/'.join((model_dir, hill_name, oasis_name, lfads_model_desc, base_name))
-    valpa_hill_filename = '/'.join((model_dir, hill_name, valpa_name, valpa_model_desc, base_name))
+    filepath = Path(
+        model_dir, 
+        calc_dyn_name, 
+        MODEL_NAME_DICT[model], 
+        PARAM_NAME_DICT[param_model], 
+        filename
+        )
     
-    data_ar1_dict = utils.read_data('../synth_data/%s'%data_ar1_name)
-    data_hill_dict = utils.read_data('../synth_data/%s'%data_hill_name)
-#     import pdb; pdb.set_trace()
+    model_name = f'{model}_{calc_dyn}'
     
-    oasis_ar1_latent_dict = pickle.load(open(oasis_ar1_filename, 'rb'))
-    valpa_ar1_latent_dict = pickle.load(open(valpa_ar1_filename, 'rb'))
-    oasis_hill_latent_dict = pickle.load(open(oasis_hill_filename, 'rb'))
-    valpa_hill_latent_dict = pickle.load(open(valpa_hill_filename, 'rb'))
+    return filepath, model_name
+
+
+#############################################
+def get_data_dict(data_dir, calc_dyn='ar1'):
+
+    if calc_dyn not in ['ar1', 'hill']:
+        raise ValueError('calc_dyn must be either \'ar1\' or \'hill\'.')
+    calc_dyn_str = 'fluor_ar1' if calc_dyn == 'ar1' else 'fluor_hill'
     
-    fig_valpa_ar1 = plot_lorenz_examples(latent_dict=valpa_ar1_latent_dict, data_dict=data_ar1_dict, hill=False)
-    fig_valpa_ar1.savefig('./lorenz_examples_valpa_ar1_%s_%s.svg'%(sys_name, conditions))
-    fig_oasis_ar1 = plot_lorenz_examples(latent_dict=oasis_ar1_latent_dict, data_dict=data_ar1_dict, hill=False)
-    fig_oasis_ar1.savefig('./lorenz_examples_oasis_ar1_%s_%s.svg'%(sys_name, conditions))
+    ou_str = get_ou_str(sigma=0.5) # s should be 2.0
+
+    calc_dyn_name = f'{DATA_NAME}_{calc_dyn_str}_{ou_str}_n'
+
+    data_dict = utils.read_data(data_dir, calc_dyn_name)
+
+    return data_dict
+
+
+#############################################
+def get_conditions_str(dt_sys=0.1, dt_cal=0.1, sigma=5.0, rate=2.0):
+
+    conditions_str = (
+        f'sys{dt_sys:.4f}_'
+        f'cal{dt_cal:.4f}_'
+        f'sig{sigma:.1f}_'
+        f'base{rate:.1f}'
+    )
+
+    return conditions_str
+
+
+#############################################
+def get_ou_str(sigma=5.0):
+
+    s = 1 / sigma
+    ou = f'ou_t0.3_s{s:.1f}'
+    return ou
+
+
+##--------PLOT FUNCTIONS--------##
+#############################################
+def adjust_axes(ax, min_val=0, axis='both', lw=2.5):
+
+    if axis not in ['x', 'y', 'both']:
+        raise ValueError('axis must be \'x\', \'y\', or \'both\'.')
+
+    if axis in ['x', 'both']:
+        xticks = [min_val, int(np.around(ax.get_xlim[1]))]
+        ax.set_xticks(xticks)
+        ax.spines['bottom'].set_bounds(xticks)
+        ax.xaxis.set_tick_params(length=lw * 2, width=lw)
+
+    if axis in ['y', 'both']:
+        yticks = [min_val, int(np.around(ax.get_ylim[1]))]
+        ax.set_yticks(yticks)
+        ax.spines['left'].set_bounds(yticks)
+        ax.yaxis.set_tick_params(length=lw * 2, width=lw)
+
+
+#############################################
+def plot_lorenz_examples(latent_dict, data_dict, calc_dyn='ar1', 
+                         num_traces_to_show=8, figsize=(9.6, 4)):
+
+    fig, axs = plt.subplots(
+        nrows=2, ncols=4, figsize=figsize,
+        gridspec_kw={'wspace': 0.6, 'hspace': 0.4}
+        )
     
-    fig_valpa_hill = plot_lorenz_examples(latent_dict=valpa_hill_latent_dict, data_dict=data_hill_dict, hill=True)
-    fig_valpa_hill.savefig('./lorenz_examples_valpa_hill_%s_%s.svg'%(sys_name, conditions))
-    fig_oasis_hill = plot_lorenz_examples(latent_dict=oasis_hill_latent_dict, data_dict=data_hill_dict, hill=True)
-    fig_oasis_hill.savefig('./lorenz_examples_oasis_hill_%s_%s.svg'%(sys_name, conditions))
+    # some plotting parameters
+    grdtr_lw = 2
+    lw = 1.5
+    fs = 12
+    grdtr_color = COLORS['linc_red']
+    recon_color = COLORS['linc_blue']
+    grey = COLORS['linc_grey']
+
+    # plot ground truth vs reconstructed data
+    data_type_dict = {
+        'fluor' : ['Normalized dF/F', 1], # y label, y shift
+        'rates' : ['Spike Rate (Hz)', 15],
+        'spikes': ['Spike Counts', 4],
+        'latent': ['Factors', 1],
+    }
+    for d, (data_type, (ylabel, shift)) in enumerate(data_type_dict.items()):
+        r = d // 2
+        c = d % 2
+        ax = ax[r, c]
+
+        data_suffix = f'_{calc_dyn}' if data_type == 'fluor' else ''
+        latent_suffix = '_aligned' if data_type == 'latent' else ''
+        n = 3 if data_type == 'latent' else num_traces_to_show
+        
+        s = np.arange(n) * shift
+        ax.plot(
+            TIME, 
+            s + data_dict[f'valid_{data_type}{data_suffix}'][0][:, : n], 
+            color=grdtr_color, lw=grdtr_lw
+            )
+        ax.plot(
+            TIME, 
+            s + latent_dict['valid'][f'{data_type}{latent_suffix}'][0][:, : n], 
+        color=recon_color, lw=lw
+        )
+
+        ax.set_ylabel(ylabel, fontsize=fs)
+        if data_type == 'latent':
+            adjust_axes(ax, 0, axis='x')
+            ax.get_yaxis().set_visible(False)
+            ax.spines['left'].set_visible(False)
+        else:
+            adjust_axes(ax, 0)
+
+        if r == 0:
+            ax.set_xticklabels('')
+        else:
+            ax.set_xlabel('Time (s)', fontsize=fs)
+        
     
-#     import pdb; pdb.set_trace()
-                          
-def plot_lorenz_examples(latent_dict, data_dict, hill, num_traces_to_show=8, figsize=(5.5,2)):
-    fig, axs = plt.subplots(nrows=2, ncols =4, figsize=figsize)
+    # plot ground truth vs reconstructed data in scatterplot
+    data_type_dict = {
+        'fluor' : 'Fluorescence',
+        'rates' : 'Spike Rates',
+        'spikes': 'Spike Counts',
+        'latent': 'Lorenz State',
+    }
+    for d, (data_type, title) in enumerate(data_type_dict.items()):
+        r = d // 2
+        c = d % 2
+        ax = ax[r, c + 2]
 
-    time = np.linspace(0, 3, 90)
+        data_suffix = f'_{calc_dyn}' if data_type == 'fluor' else ''
+        latent_suffix = '_aligned' if data_type == 'latent' else ''
+        
+        ax.plot(
+            latent_dict['valid'][f'{data_type}{latent_suffix}'].ravel(), 
+            data_dict[f'valid_{data_type}{data_suffix}'].ravel(), 
+            marker='.', ms=0.5, color=grey, rasterized=True
+            )
+        
+        ax.set_title(title, fontsize=fs)
+        ax.set_ylabel('Ground Truth', fontsize=fs)
+        ax.set_xlabel('Reconstruction', fontsize=fs)
 
-    num_traces_to_show=8
-    ax = axs[0,0]
-    plt.sca(ax)
-    s = np.arange(num_traces_to_show)
-    plt.plot(time, s + data_dict['valid_fluor_' + '%s'%('hillar1' if hill else 'ar1')][0][:, :num_traces_to_show], color=linclab_red, lw=1)
-    plt.plot(time, s + latent_dict['valid']['fluor'][0][:, :num_traces_to_show], color=linclab_blue, lw=0.75)
-    plt.yticks(np.concatenate([s, s[1:]-1, [s[-1] + s[1]-1]]), [s[0], s[1]-1, ''*6])
-    ax.set_xticklabels([])
-    plt.ylabel('normalized dF/F', fontsize=6)
+        min_val = -1 if data_type == 'latent' else 0
+        adjust_axes(ax, min_val=min_val)
 
-    ax = axs[0,1]
-    plt.sca(ax)
-    s = np.arange(num_traces_to_show)*10
-    plt.plot(time, s + data_dict['valid_rates'][0][:, :num_traces_to_show], color=linclab_red, lw=1)
-    plt.plot(time, s + latent_dict['valid']['rates'][0][:, :num_traces_to_show], color=linclab_blue, lw=0.75)
-    plt.yticks(np.concatenate([s, s[1:]-2, [s[-1] + s[1]-2]]), [s[0], s[1]-2, ''*6])
-    ax.set_xticklabels([])
-    plt.ylabel('Spike Rate (Hz)', fontsize=6)
 
-    ax = axs[1,0]
-    plt.sca(ax)
-    s = np.arange(num_traces_to_show)*4
-    plt.plot(time, s + data_dict['valid_spikes'][0][:, :num_traces_to_show], color=linclab_red, lw=1)
-    plt.plot(time, s + latent_dict['valid']['spikes'][0][:, :num_traces_to_show], color=linclab_blue, lw=0.75)
-    plt.yticks(np.concatenate([s, s[1:]-1, [s[-1] + s[1]-1]]), [s[0], s[1]-1, ''*6])
-    plt.ylabel('Spike Counts', fontsize=6)
-    plt.xlabel('Time (s)', fontsize=6)
-
-    ax = axs[1,1]
-    plt.sca(ax)
-    s = np.arange(3)
-    plt.plot(time, s + data_dict['valid_latent'][0], color=linclab_red, lw=1)
-    plt.plot(time, s + latent_dict['valid']['latent_aligned'][:90], color=linclab_blue, lw=0.75)
-    plt.ylabel('Factors', fontsize=6)
-    plt.xlabel('Time (s)', fontsize=6)
-
-    ax.yaxis.set_ticks_position('none')
-    ax.spines['left'].set_visible(False)
-    plt.yticks([])
-    
+    # adjust plot formatting
     for ax in axs.ravel():
         # Hide the right and top spines
         ax.spines['right'].set_visible(False)
@@ -219,48 +429,31 @@ def plot_lorenz_examples(latent_dict, data_dict, hill, num_traces_to_show=8, fig
         ax.yaxis.set_ticks_position('left')
         ax.xaxis.set_ticks_position('bottom')
 
-        plt.sca(ax)
-        plt.xticks(fontsize=6)
-        plt.yticks(fontsize=6)
+        ax.tick_params(labelsize=fs)
 
-    ax = axs[0, 2]
-    plt.sca(ax)
-    plt.plot(latent_dict['valid']['fluor'].ravel(), data_dict['valid_fluor_' + '%s'%('hillar1' if hill else 'ar1')].ravel(), '.', ms=0.5, color=linclab_grey, rasterized=True)
-    plt.title('Fluorescence', fontsize=8)
-    plt.ylabel('Truth', fontsize=6)
-    plt.xlabel('Reconstruction', fontsize=6)
-    plt.xticks([0, 1])
-    plt.yticks([0, 1])
-
-    ax = axs[0, 3]
-    plt.sca(ax)
-    plt.plot(latent_dict['valid']['rates'].ravel(), data_dict['valid_rates'].ravel(), '.', ms=0.5, color=linclab_grey, rasterized=True)
-    plt.title('Rates', fontsize=8)
-    plt.ylabel('Truth', fontsize=6)
-    plt.xlabel('Reconstruction', fontsize=6)
-    plt.xticks([0, 40])
-    plt.yticks([0, 40])
-
-    ax = axs[1, 2]
-    plt.sca(ax)
-    plt.plot(latent_dict['valid']['spikes'].ravel(), data_dict['valid_spikes'].ravel(), '.', ms=0.5, color=linclab_grey, rasterized=True)
-    plt.title('Spike Counts', fontsize=8)
-    plt.ylabel('Truth', fontsize=6)
-    plt.xlabel('Reconstruction', fontsize=6)
-    plt.xticks([0, 9])
-    plt.yticks([0, 9])
-
-    ax = axs[1, 3]
-    plt.sca(ax)
-    plt.plot(latent_dict['valid']['latent_aligned'].ravel(), data_dict['valid_latent'].ravel(), '.', ms=0.5, color=linclab_grey, rasterized=True)
-    plt.title('Lorenz State', fontsize=8)
-    plt.ylabel('Truth', fontsize=6)
-    plt.xlabel('Reconstruction', fontsize=6)
-    plt.xticks([-1, 1])
-    plt.yticks([-1, 1])
-
-    fig.subplots_adjust(wspace=0.25, hspace=0.25)
     return fig
         
+
 if __name__ == '__main__':
-    main()
+    
+    parser = argparse.ArgumentParser()
+
+    # optional parameters
+    parser.add_argument('-d', '--data_dir', default=Path('..', 'synth_data'), 
+                        type=Path)
+    parser.add_argument('-m', '--model_dir', default='models', type=Path)
+    parser.add_argument('-o', '--output_dir', default=None, type=Path, 
+                        help='model_dir is used if output_dir is None')
+
+    parser.add_argument('--dt_sys', default=0.1, type=float)
+    parser.add_argument('--dt_cal', default=0.1, type=float)
+    parser.add_argument('--sigma', default=5.0, type=float)
+    parser.add_argument('--rate', default=2.0, type=float)
+    parser.add_argument('--log_level', default='info', 
+                        help='log level, e.g. debug, info, error')
+
+    args = parser.parse_args()
+
+    logger = utils.get_logger_with_basic_format(level=args.log_level)
+    
+    main(args)

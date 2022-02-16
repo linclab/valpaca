@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import logging
 from pathlib import Path
 import sys
 
@@ -27,6 +28,9 @@ from sklearn.pipeline import make_pipeline
 sys.path.extend(['.', '..'])
 from utils import utils
 from models import supervised
+
+
+logger = logging.getLogger(__name__)
 
 
 ##--------HYPERPARAMETERS--------##
@@ -61,8 +65,8 @@ MODEL_KWARGS = {
 FIT_KWARGS = {
     'batch_size': 68,
     'learning_rate': 5e-5,
-    'pos_weight': None,
-    'print_freq': 200,
+    'pos_weight': 'auto',
+    'log_freq': 200,
     'max_epochs': 5000,
     'max_iter': 1,
     'save_loc': '.'
@@ -80,27 +84,37 @@ THETAS_MATCH_DU = [0, 45]
 #############################################
 def main(args):
 
+    # set logger to the specified level
+    utils.set_logger_level(logger, level=args.log_level)
+
     latent_dict = utils.load_latent(args.model_dir)
     data_dict = update_keys(utils.read_data(args.data_path))
 
+    if args.output_dir is None:
+        args.output_dir = args.model_dir
+
     # plot examples
-    savepath = Path(args.model_dir, 'allen_examples.svg')
+    savepath = Path(args.output_dir, 'allen_examples')
     plot_examples(data_dict, latent_dict, trial_ix=15, savepath=savepath)
     
     # plot factor PCA
     plot_save_factors_3d_all(
-        data_dict, latent_dict, Path(args.model_dir, 'factors_3d_plots'), 
+        data_dict, latent_dict, Path(args.output_dir, 'factors_3d_plots'), 
         projections=args.projections, 
         folded=True, 
         seed=args.seed
         )
 
     # run decoders
+    if args.num_runs == 0:
+        return
+
     for scale in [True, False]:
         scale_str = "scaling" if scale else "no scaling"
-        print(f"\nDecoders: {scale_str}")
+
+        logger.info(f'Decoders: {scale_str}', extra={'spacing': '\n'})
         run_decoders(
-            data_dict, latent_dict, args.model_dir, run_logreg=args.run_logreg, 
+            data_dict, latent_dict, args.output_dir, run_logreg=args.run_logreg, 
             run_svm=args.run_svm, run_nl_decoder=args.run_nl_decoder, 
             num_runs=args.num_runs, seed=args.seed, scale=scale, 
             log_scores=True
@@ -145,7 +159,7 @@ def load_trial_data(data_dict, latent_dict=None):
 
 ##--------DECODER FUNCTIONS--------##
 #############################################
-def run_decoders(data_dict, latent_dict, savedir, run_logreg=True, 
+def run_decoders(data_dict, latent_dict, output_dir, run_logreg=True, 
                  run_svm=True, run_nl_decoder=False, num_runs=10, scale=True, 
                  seed=None, log_scores=True):
 
@@ -157,29 +171,29 @@ def run_decoders(data_dict, latent_dict, savedir, run_logreg=True,
     y_test = data_dict['valid_unexp'].astype('int')
     y = np.concatenate([y_train, y_test], axis=0)
 
-    Path(savedir).mkdir(parents=True, exist_ok=True)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
 
     if run_logreg:
         if log_scores:
-            print("\nLogistic regression scores:")
+            logger.info('Logistic regression scores:', extra={'spacing': '\n'})
         logreg_scores = perform_decoder_runs(
             logreg_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
             log_scores=log_scores, scale=scale
             )
-        np.save(Path(savedir, 'logreg_decoder_scores'), logreg_scores)
+        np.save(Path(output_dir, 'logreg_decoder_scores'), logreg_scores)
 
     if run_svm:
         if log_scores:
-            print("\nRBF SVM scores:")
+            logger.info('RBF SVM scores:', extra={'spacing': '\n'})
         logreg_scores = perform_decoder_runs(
             rbf_svm_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
             log_scores=log_scores, scale=scale
             )
-        np.save(Path(savedir, 'rbf_svm_scores'), logreg_scores)
+        np.save(Path(output_dir, 'rbf_svm_scores'), logreg_scores)
 
     if run_nl_decoder:
         if log_scores:
-            print("\nNon-linear decoder scores:")
+            logger.info('Non-linear decoder scores:', extra={'spacing': '\n'})
 
         decoder_kwargs = dict()
 
@@ -188,7 +202,7 @@ def run_decoders(data_dict, latent_dict, savedir, run_logreg=True,
         model_kwargs['device'] = device
 
         fit_kwargs = copy.deepcopy(FIT_KWARGS)
-        fit_kwargs['save_loc'] = savedir
+        fit_kwargs['save_loc'] = output_dir
 
         decoder_kwargs = {
             'scale'       : scale,
@@ -201,7 +215,7 @@ def run_decoders(data_dict, latent_dict, savedir, run_logreg=True,
             log_scores=log_scores, **decoder_kwargs
             )
 
-        np.save(Path(savedir, 'non_linear_decoder_scores'), nl_decoder_scores)
+        np.save(Path(output_dir, 'non_linear_decoder_scores'), nl_decoder_scores)
 
 
 #############################################
@@ -213,8 +227,7 @@ def perform_decoder_runs(decoder_fct, X, y, num_runs=10, seed=None,
     sub_seeds = [np.random.choice(int(2e5)) for _ in range(num_runs)]
 
     scores = []
-    for i in range(num_runs):
-        sub_seed = sub_seeds[0]
+    for i, sub_seed in enumerate(sub_seeds):
 
         # get a new split
         train_data, test_data = train_test_split(
@@ -232,7 +245,7 @@ def perform_decoder_runs(decoder_fct, X, y, num_runs=10, seed=None,
 
         if log_scores:
             score_mean = np.mean(scores)
-            score_sem = np.std(scores) / np.sqrt(i+1)
+            score_sem = np.std(scores) / np.sqrt(i + 1)
 
             running_score_str = u'running score: {:.3f} {} {:.3f}'.format(
                 score_mean, PLUS_MIN, score_sem
@@ -241,7 +254,7 @@ def perform_decoder_runs(decoder_fct, X, y, num_runs=10, seed=None,
                 i+1, run_score, running_score_str
                 )
 
-            print(score_str)
+            logger.info(score_str)
 
 
 #############################################
@@ -276,7 +289,7 @@ def logreg_eval(X_train, y_train, X_test, y_test, scale=True, seed=None,
         param_str = '\n    '.join(
             [f'{k}: {v}' for k, v in pipeline.best_params_.items()]
             )
-        print(f'best parameters (logreg):\n    {param_str}')
+        logger.info(f'Best parameters (logreg):\n    {param_str}')
 
     # predict on the held out test set
     score = metrics.balanced_accuracy_score(y_test, pipeline.predict(X_test))
@@ -319,7 +332,7 @@ def rbf_svm_eval(X_train, y_train, X_test, y_test, scale=True, seed=None,
         param_str = '\n    '.join(
             [f'{k}: {v}' for k, v in pipeline.best_params_.items()]
             )
-        print(f'best parameters (rbf SVM):\n    {param_str}')
+        logger.info(f'Best parameters (rbf SVM):\n    {param_str}')
 
     # predict on the held out test set
     score = metrics.balanced_accuracy_score(y_test, pipeline.predict(X_test))
@@ -342,11 +355,6 @@ def recurrent_net_eval(X_train, y_train, X_test, y_test, model_kwargs,
 
     input_size = X_train.shape[-1]
     dense_size = max(y_train) + 1
-
-    if fit_kwargs['pos_weight'] is None: # derive weights from train set
-        fit_kwargs['pos_weight'] = [
-            sum(y_train != v) / sum(y_train == v) for v in [0, 1]
-            ]
 
     utils.seed_all(seed)
     model = supervised.Supervised_BiRecurrent_Net(
@@ -389,64 +397,103 @@ def balanced_accuracy_score(targets, predictions):
 
 ##--------PLOT EXAMPLES--------##
 #############################################
-def plot_examples(data_dict, latent_dict, trial_ix=0, num_traces=8, 
-                  figsize=(2.75, 2), savepath=None):
+def adjust_axes(ax, min_val=0, max_val=None, axis='both', lw=1, length=4, 
+                n_sig=2):
 
-    fig, axs = plt.subplots(nrows=2, ncols=2, figsize=figsize)
+    if axis not in ['x', 'y', 'both']:
+        raise ValueError('axis must be \'x\', \'y\', or \'both\'.')
+
+    if axis in ['x', 'both']:
+        if max_val is None:
+            xmax = ax.get_xlim()[1]
+            max_val = np.around(
+                xmax, -int(np.floor(np.log10(np.absolute(xmax)) / n_sig))
+                )
+        xticks = [min_val, max_val]
+        ax.set_xticks(xticks)
+        ax.spines['bottom'].set_bounds(xticks)
+        ax.xaxis.set_tick_params(length=length, width=lw)
+
+    if axis in ['y', 'both']:
+        if max_val is None:
+            ymax = ax.get_ylim()[1]
+            max_val = np.around(
+                ymax, -int(np.floor(np.log10(np.absolute(ymax)) / n_sig))
+                )
+        yticks = [min_val, max_val]
+        ax.set_yticks(yticks)
+        ax.spines['left'].set_bounds(yticks)
+        ax.yaxis.set_tick_params(length=length, width=lw)
+
+
+#############################################
+def plot_examples(data_dict, latent_dict, trial_ix=0, num_traces=8, 
+                  figsize=(4.8, 4), savepath=None):
+
+    fig, axs = plt.subplots(
+        nrows=2, ncols=2, figsize=figsize, sharex=True, 
+        gridspec_kw={'wspace': 0.6, 'hspace': 0.4}
+        )
 
     # gather data
-    gt_fluor = data_dict['valid_fluor'][trial_ix] # ground truth
+    grdtr_fluor = data_dict['valid_fluor'][trial_ix] # ground truth
     recon_fluor = latent_dict['valid']['fluor'][trial_ix]
     recon_rates = latent_dict['valid']['rates'][trial_ix]
     recon_spikes = latent_dict['valid']['spikes'][trial_ix]
     latents = latent_dict['valid']['latent'][trial_ix]
 
-    x = np.linspace(*TIME_EDGES, len(gt_fluor)) # time in seconds
+    x = np.linspace(*TIME_EDGES, len(grdtr_fluor)) # time in seconds
     
     # some plotting parameters
-    gt_lw = 2
+    grdtr_lw = 2
     lw = 1.5
-    fs = 6
-    gt_color = COLORS['linc_red']
+    fs = 12
+    grdtr_color = COLORS['linc_red']
     recon_color = COLORS['linc_blue']
 
     # select indices of sequences with higher standard deviations
-    ix_incl = np.argsort(gt_fluor.std(axis=0))[-num_traces : ]
+    ix_incl = np.argsort(grdtr_fluor.std(axis=0))[-num_traces : ]
     num_traces = len(ix_incl)
 
     # plot fluorescence pre/post reconstruction
-    ax = axs[0, 0]
+    fl_ax = axs[0, 0]
     s = np.arange(num_traces) * 5
     gain = data_dict['obs_gain_init'].mean()
-    ax.plot(x, s + gt_fluor[:, ix_incl] / gain, color=gt_color, lw=gt_lw)
-    ax.plot(x, s + recon_fluor[:, ix_incl] / gain, color=recon_color, lw=lw)
-
-    ax.set_xticklabels([])
-    ax.set_ylabel('dF/F', fontsize=fs)
+    fl_ax.plot(x, s + grdtr_fluor[:, ix_incl] / gain, color=grdtr_color, 
+               lw=grdtr_lw)
+    fl_ax.plot(x, s + recon_fluor[:, ix_incl] / gain, color=recon_color, lw=lw)
+    fl_ax.set_ylabel('dF/F', fontsize=fs)
+    adjust_axes(fl_ax, min_val=0, axis='y')
 
     # plot reconstructed spike rates
-    ax = axs[0, 1]
+    rt_ax = axs[0, 1]
     s = np.arange(num_traces) * 20
-    ax.plot(x, s + recon_rates[:, ix_incl], color=recon_color, lw=lw)
-    ax.set_xticklabels([])
-    ax.set_ylabel('Spike Rate (Hz)', fontsize=fs)
+    rt_ax.plot(x, s + recon_rates[:, ix_incl], color=recon_color, lw=lw)
+    rt_ax.set_ylabel('Spike Rate (Hz)', fontsize=fs)
+    adjust_axes(rt_ax, min_val=0, axis='y')
 
     # plot reconstructed spike counts
-    ax = axs[1, 0]
+    ct_ax = axs[1, 0]
     s = np.arange(num_traces)
-    ax.plot(x, s + recon_spikes[:, ix_incl], color=recon_color, lw=lw)
-    ax.set_ylabel('Spike Counts', fontsize=fs)
-    ax.set_xlabel('Time (s)', fontsize=fs)
+    ct_ax.plot(x, s + recon_spikes[:, ix_incl], color=recon_color, lw=lw)
+    ct_ax.set_ylabel('Spike Counts', fontsize=fs)
+    ct_ax.set_xlabel('Time (s)', fontsize=fs)
+    adjust_axes(ct_ax, min_val=0, axis='y')
 
-    ax = axs[1, 1]
-    s = np.arange(num_traces)
-    ax.plot(x, s + latents[:, : num_traces], color=recon_color, lw=lw)
-    ax.set_ylabel('Factors', fontsize=6)
-    ax.set_xlabel('Time (s)', fontsize=6)
-    ax.yaxis.set_ticks_position('none')
-    ax.spines['left'].set_visible(False)
-    
+    # plot factors
+    fact_ax = axs[1, 1]
+    s = np.arange(num_traces) * 2
+    fact_ax.plot(x, s + latents[:, : num_traces], color=recon_color, lw=lw)
+    fact_ax.set_xlabel('Time (s)', fontsize=fs)
+    fact_ax.set_ylabel('Factors', fontsize=fs)
+    fact_ax.set_yticks([])
+    fact_ax.set_yticklabels([])
+    fact_ax.spines['left'].set_visible(False)
+
+    # adjust axis formatting
     for ax in axs.ravel():
+        adjust_axes(ax, min_val=TIME_EDGES[0], max_val=TIME_EDGES[-1], axis='x')
+
         # Hide the right and top spines
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
@@ -457,19 +504,18 @@ def plot_examples(data_dict, latent_dict, trial_ix=0, num_traces=8,
 
         ax.tick_params(labelsize=fs)
 
-    fig.subplots_adjust(wspace=0.25, hspace=0.25)
-
     if savepath is not None:
         Path(savepath).parent.mkdir(parents=True, exist_ok=True)
-        fig.savefig(savepath, **SAVE_KWARGS)
+        fig.savefig(f'{savepath}.{SAVE_KWARGS["format"]}', **SAVE_KWARGS)
 
     return fig
 
 
 ##--------PLOT PCA FACTORS--------##
 #############################################
-def plot_save_factors_3d_all(data_dict, latent_dict, savedir='factors_3d_plots', 
-                             projections=False, folded=True, seed=None):
+def plot_save_factors_3d_all(data_dict, latent_dict, 
+                             output_dir='factors_3d_plots', projections=False, 
+                             folded=True, seed=None):
 
     latents, unexp, ori = load_trial_data(data_dict, latent_dict)
 
@@ -488,9 +534,11 @@ def plot_save_factors_3d_all(data_dict, latent_dict, savedir='factors_3d_plots',
                 projections=projections, folded=folded, seed=seed
                 )
             
-            savepath = Path(savedir, savename)
-            Path(savedir).mkdir(parents=True, exist_ok=True)
-            fact_fig.savefig(savepath, **SAVE_KWARGS)    
+            savepath = Path(output_dir, savename)
+            Path(output_dir).mkdir(parents=True, exist_ok=True)
+            fact_fig.savefig(
+                f'{savepath}.{SAVE_KWARGS["format"]}', **SAVE_KWARGS
+                )
             
     plt.close()
 
@@ -947,7 +995,7 @@ def create_polygon_fill_between(ax, mean, error, offset, color_name, alpha=0.2,
                  bottom[i, axes_keep]]))
             
         except (ValueError, Exception) as err:
-            print(f'Polygon creation error: {err}')
+            logger.warning(f'Polygon creation error: {err}')
             pass
     
     if folded:
@@ -959,7 +1007,7 @@ def create_polygon_fill_between(ax, mean, error, offset, color_name, alpha=0.2,
             try:
                 union = unary_union([polygon, union])
             except ValueError as err:
-                print(f'Union creation error: {err}')
+                logger.warning(f'Union creation error: {err}')
                 pass
 
         polygons = union
@@ -980,17 +1028,28 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-m', '--model_dir', type=str)
-    parser.add_argument('-d', '--data_path', type=str)
+    parser.add_argument('-d', '--data_path', type=Path)
+
+    # optional parameters
+    parser.add_argument('-m', '--model_dir', default='models', type=Path, 
+                        help='latent.pkl directory')
+    parser.add_argument('-o', '--output_dir', default=None, type=Path, 
+                        help='model_dir is used if output_dir is None')
     parser.add_argument('-n', '--num_runs', default=10, type=int, 
-        help='number of decoders to run per type')
-    parser.add_argument('-l', '--run_logreg', action='store_true')
-    parser.add_argument('-s', '--run_svm', action='store_true')
-    parser.add_argument('-nl', '--run_nl_decoder', action='store_true')
+                        help='number of decoders to run per decoder type')
     parser.add_argument('-p', '--projections', action='store_true')
-    parser.add_argument('-r', '--seed', default=100, type=int)
+
+    parser.add_argument('--run_logreg', action='store_true')
+    parser.add_argument('--run_svm', action='store_true')
+    parser.add_argument('--run_nl_decoder', action='store_true')
+
+    parser.add_argument('--seed', default=100, type=int)
+    parser.add_argument('--log_level', default='info', 
+                        help='log level, e.g. debug, info, error')
 
     args = parser.parse_args()
+
+    logger = utils.get_logger_with_basic_format(level=args.log_level)
 
     main(args)
 

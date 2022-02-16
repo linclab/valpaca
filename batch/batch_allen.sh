@@ -1,33 +1,31 @@
 #!/bin/bash
 #SBATCH --partition=long
-#SBATCH --cpus-per-task=8
-#SBATCH --gres=gpu:2
+#SBATCH --gres=gpu:rtx8000:1
 #SBATCH --mem=48GB
 #SBATCH --array=0-7
-#SBATCH --time=6:00:00
+#SBATCH --time=4:00:00
 #SBATCH -o /network/scratch/g/gillonco/allen_%A-%a.out 
 
 # 1. load modules
 module load anaconda/3
-source $CONDA_ACTIVATE
-
-conda activate ssl
+source activate ssl
 
 python -V
 
 SEED=$((200+SLURM_ARRAY_TASK_ID)) # increment seed for each array task
 
 
-
 # ORION HYPERPARAMS
-if [[ $SUB == 1 ]];
+if [[ $SUB == 1 ]]; then
     DEEP=128
     dCTRL=64 # valpaca only
     OBS=128 # valpaca only
+    CONT=128 # lfads only
 else
     DEEP=64
     dCTRL=32 # valpaca only
     OBS=128 # valpaca only
+    CONT=$dCTRL # lfads only
 fi
 
 # check exported variables, and predict model directory name
@@ -38,7 +36,6 @@ if [[ $LFADS == 1 ]]; then
 
     # params
     cENC=$DEEP
-    CONT=128
     FACT=32
     gENC=$DEEP
     GENE=200

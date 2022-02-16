@@ -10,10 +10,13 @@ import scipy
 
 def deconvolve(y, g=(None,), sn=None, b=None, b_nonneg=True,
                optimize_g=0, penalty=0, **kwargs):
-    """Infer the most likely discretized spike train underlying an fluorescence trace
+    """Infer the most likely discretized spike train underlying an fluorescence 
+    trace.
+
     Solves the noise constrained sparse non-negative deconvolution problem
     min |s|_q subject to |c-y|^2 = sn^2 T and s = Gc >= 0
     where q is either 1 or 0, rendering the problem convex or non-convex.
+
     Parameters:
     -----------
     y : array, shape (T,)
@@ -23,7 +26,8 @@ def deconvolve(y, g=(None,), sn=None, b=None, b_nonneg=True,
         Estimated from the autocovariance of the data if no value is given.
     sn : float, optional, default None
         Standard deviation of the noise distribution.  If no value is given,
-        then sn is estimated from the data based on power spectral density if not provided.
+        then sn is estimated from the data based on power spectral density if 
+        not provided.
     b : float, optional, default None
         Fluorescence baseline value. If no value is given, then b is optimized.
     b_nonneg: bool, optional, default True
@@ -34,7 +38,9 @@ def deconvolve(y, g=(None,), sn=None, b=None, b_nonneg=True,
     penalty : int, optional, default 1
         Sparsity penalty. 1: min |s|_1  0: min |s|_0
     kwargs : dict
-        Further keywords passed on to constrained_oasisAR1 or constrained_onnlsAR2.
+        Further keywords passed on to constrained_oasisAR1 or 
+        constrained_onnlsAR2.
+
     Returns:
     --------
     c : array, shape (T,)
@@ -44,7 +50,8 @@ def deconvolve(y, g=(None,), sn=None, b=None, b_nonneg=True,
     b : float
         Fluorescence baseline value.
     g : tuple of float
-        Parameters of the AR(2) process that models the fluorescence impulse response.
+        Parameters of the AR(2) process that models the fluorescence impulse 
+        response.
     lam: float
         Optimal Lagrange multiplier for noise constraint under L1 penalty
     """
@@ -58,31 +65,38 @@ def deconvolve(y, g=(None,), sn=None, b=None, b_nonneg=True,
             sn = est[1]
     if len(g) == 1:
         import oasis
+        optimize_b = True if b is None else False
         return oasis.constrained_oasisAR1(
-            y, g[0], sn, optimize_b=True if b is None else False,
-            b_nonneg=b_nonneg, optimize_g=optimize_g,
-            penalty=penalty, **kwargs
+            y, g[0], sn, optimize_b=optimize_b, b_nonneg=b_nonneg, 
+            optimize_g=optimize_g, penalty=penalty, **kwargs
             )
     elif len(g) == 2:
         import oasis
         if optimize_g > 0:
             warnings.warn(
-                "Optimization of AR parameters is already fairly stable for AR(1), "
-                "but slower and more experimental for AR(2)")
+                'Optimization of AR parameters is already fairly stable for '
+                'AR(1), but slower and more experimental for AR(2)'
+                )
+        
+        optimize_b = True if b is None else False
         return oasis.constrained_onnlsAR2(
-            y, g, sn, optimize_b=True if b is None else False,
-            b_nonneg=b_nonneg, optimize_g=optimize_g,
-            penalty=penalty, **kwargs
+            y, g, sn, optimize_b=optimize_b, b_nonneg=b_nonneg, 
+            optimize_g=optimize_g, penalty=penalty, **kwargs
             )
     else:
-        print('g must have length 1 or 2, cause only AR(1) and AR(2) are currently implemented')
+        raise ValueError(
+            'g must have length 1 or 2, cause only AR(1) and AR(2) are '
+            'currently implemented.'
+            )
 
 # functions to estimate AR coefficients and sn from
 # https://github.com/agiovann/Constrained_NMF.git
 # https://github.com/j-friedrich/OASIS.git
-def estimate_parameters(y, p=2, range_ff=[0.25, 0.5], method='mean', lags=10, fudge_factor=1., nonlinear_fit=False):
+def estimate_parameters(y, p=2, range_ff=[0.25, 0.5], method='mean', lags=10, 
+                        fudge_factor=1., nonlinear_fit=False):
     """
-    Estimate noise standard deviation and AR coefficients
+    Estimate noise standard deviation and AR coefficients.
+
     Parameters
     ----------
     p : positive integer
@@ -103,9 +117,11 @@ def estimate_parameters(y, p=2, range_ff=[0.25, 0.5], method='mean', lags=10, fu
     return g, sn
 
 
-def estimate_time_constant(y, p=2, sn=None, lags=10, fudge_factor=1., nonlinear_fit=False):
+def estimate_time_constant(y, p=2, sn=None, lags=10, fudge_factor=1., 
+                           nonlinear_fit=False):
     """
-    Estimate AR model parameters through the autocovariance function
+    Estimate AR model parameters through the autocovariance function.
+
     Parameters
     ----------
     y : array, shape (T,)
@@ -119,6 +135,7 @@ def estimate_time_constant(y, p=2, sn=None, lags=10, fudge_factor=1., nonlinear_
         number of additional lags where he autocovariance is computed
     fudge_factor : float (0< fudge_factor <= 1)
         shrinkage factor to reduce bias
+        
     Returns
     -------
     g : estimated coefficients of the AR process
@@ -130,7 +147,9 @@ def estimate_time_constant(y, p=2, sn=None, lags=10, fudge_factor=1., nonlinear_
     lags += p
     # xc = axcov(y, lags)[lags:]
     y = y - y.mean()
-    xc = np.array([y[i:].dot(y[:-i if i else None]) for i in range(1 + lags)]) / len(y)
+    xc = np.array(
+        [y[i:].dot(y[:-i if i else None]) for i in range(1 + lags)]
+        ) / len(y)
 
     if nonlinear_fit and p <= 2:
         xc[0] -= sn**2
@@ -143,7 +162,9 @@ def estimate_time_constant(y, p=2, sn=None, lags=10, fudge_factor=1., nonlinear_
         elif p == 2:
             def func(x, a, d, r):
                 return a * (d**(x + 1) - r**(x + 1) / (1 - r**2) * (1 - d**2))
-            popt, pcov = curve_fit(func, list(range(len(xc))), xc, (xc[0], g1, .1))
+            popt, pcov = curve_fit(
+                func, list(range(len(xc))), xc, (xc[0], g1, .1)
+                )
             d, r = popt[1:]
             d *= fudge_factor
             return np.array([d + r, -d * r])
@@ -164,7 +185,9 @@ def estimate_time_constant(y, p=2, sn=None, lags=10, fudge_factor=1., nonlinear_
 
 def GetSn(y, range_ff=[0.25, 0.5], method='mean'):
     """
-    Estimate noise power through the power spectral density over the range of large frequencies
+    Estimate noise power through the power spectral density over the range of 
+    large frequencies
+    
     Parameters
     ----------
     y : array, shape (T,)

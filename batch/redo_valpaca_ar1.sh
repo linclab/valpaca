@@ -35,7 +35,7 @@ AR1=fluor_ar1
 OU=ou_t0.3_s$OASIS_S
 AR1DATAPATH=$BASEDATAPATH'_'$AR1'_'$OU
 
-python $PROJECTDIR/train_model.py -m valpaca -d $AR1DATAPATH -p $HPDIR/valpaca.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $AR1 -r
+python $PROJECTDIR/train_model.py -m valpaca -d $AR1DATAPATH -c $HPDIR/valpaca.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $AR1 -r
 
 VALPACA_MODEL_DESC=dcen0_dcon0_dgen64_dgla64_dula0_fact3_gene64_ocon32_oenc32_olat64_hp-/
 STATE_AR1_OU=$STATE'_'$AR1'_'$OU

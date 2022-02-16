@@ -35,7 +35,7 @@ HILL=fluor_hillar1
 OU=ou_t0.3_s$OASIS_S
 HILLDATAPATH=$BASEDATAPATH'_'$HILL'_'$OU'_n'
 
-python $PROJECTDIR/train_model.py -m valpaca -d $HILLDATAPATH -p $HPDIR/valpaca.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $HILL -r
+python $PROJECTDIR/train_model.py -m valpaca -d $HILLDATAPATH -c $HPDIR/valpaca.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $HILL -r
 
 VALPACA_MODEL_DESC=dcen0_dcon0_dgen64_dgla64_dula0_fact3_gene64_ocon32_oenc32_olat64_hp-/
 STATE_HILL_OU=$STATE'_'$HILL'_'$OU'_n'

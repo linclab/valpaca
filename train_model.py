@@ -1,388 +1,295 @@
 #!/usr/bin/env python
 
 import argparse
-import os
+import copy
+import logging
+from pathlib import Path
+import shutil
 import sys
 
 import torch
 import torch.optim as opt
-import pickle
+import pickle as pkl
 import numpy as np
 
 sys.path.extend(['.', '..'])
-
 from models import ar1
 from utils import run_manager, scheduler, utils, plotter
 
 
-parser = argparse.ArgumentParser()
-parser.add_argument('-m', '--model', type=str)
-parser.add_argument('-d', '--data_path', type=str)
-parser.add_argument('-p', '--config', type=str)
-parser.add_argument('-o', '--output_dir', default='/tmp', type=str)
-parser.add_argument('--max_epochs', default=2000, type=int)
-parser.add_argument('--batch_size', default=None, type=int)
-parser.add_argument('--data_suffix', default='data', type=str)
-parser.add_argument('--detect_local_minima', action='store_true')
-
-parser.add_argument('-t', '--use_tensorboard', action='store_true')
-parser.add_argument('--orion', action='store_true')
-parser.add_argument('-r', '--restart', action='store_true')
-parser.add_argument('-c', '--do_health_check', action='store_true')
-
-parser.add_argument('--lr', type=float, default=None)
-parser.add_argument('--kl_deep_max', type=float, default=None)
-parser.add_argument('--kl_obs_max', type=float, default=None)
-parser.add_argument('--kl_obs_dur', type=int, default=None)
-parser.add_argument('--kl_obs_dur_scale', type=int, default=1.0)
-parser.add_argument('--deep_start_p', type=int, default=None)
-parser.add_argument('--deep_start_p_scale', type=float, default=1.0)
-parser.add_argument('--l2_gen_scale', type=float, default=None)
-parser.add_argument('--l2_con_scale', type=float, default=None)
-parser.add_argument('--seed', type=int, default=None)
+logger = logging.getLogger(__name__)
 
 
-def main():
-    args = parser.parse_args()
+def main(args):
+
+    # set logger to the specified level
+    utils.set_logger_level(logger, level=args.log_level)
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print('Device = %s'%device)
+    logger.info(f'Device: {device}')
+    
     utils.seed_all(args.seed)
 
+    if args.output_dir is None:
+        args.output_dir = Path(args.data_path).parent
+
     hyperparams = utils.load_parameters(args.config)
-    
-    hp_string, hyperparams = adjust_hyperparams(args, hyperparams)
+    hyperparams, hp_str = adjust_hyperparams(args, hyperparams)
+    save_loc, run_name = generate_save_loc(
+        hyperparams['model'], args.data_path, args.output_dir, 
+        model_name=hyperparams['model_name'], hp_str=hp_str
+        )
+    hyperparams['run_name'] = run_name
 
-    if args.model in ["valpaca", "svlae"]:
-        param_keys = ['factor_size', 'obs_encoder_size', 'deep_g_encoder_size']
-        param_str = '\n'.join([
-            f'{k.upper().replace("_", " ")} = {hyperparams["model"][k]}' 
-            for k in param_keys
-            ])
-        print(param_str)
-
-    save_loc, hyperparams = generate_save_loc(args, hyperparams, hp_string)
-    
+    data_dict = utils.read_data(args.data_path)
     utils.save_parameters(save_loc, hyperparams)
     
-    if not os.path.exists(save_loc):
-        os.makedirs(save_loc)
-        
-    data_dict   = utils.read_data(args.data_path)
-    
     train_dl, valid_dl, plotter_dict, model, objective = prep_model(
-        model_name  = args.model,
         data_dict   = data_dict,
+        hyperparams = hyperparams,
+        model_name  = args.model_name,
         data_suffix = args.data_suffix,
         batch_size  = args.batch_size,
-        device = device,
-        hyperparams = hyperparams)
-    
-    print_model_description(model)
+        device      = device,
+        log_model   = True,
+        )    
     
     optimizer, sched = prep_optimizer(model, hyperparams)
         
-    if args.use_tensorboard:
-        writer, rm_plotter = prep_tensorboard(save_loc, plotter_dict, args.restart)
-    else:
-        writer = None
-        rm_plotter = None
-        
-    run_mng = run_manager.RunManager(model      = model,
-                                     objective  = objective,
-                                     optimizer  = optimizer,
-                                     scheduler  = sched,
-                                     train_dl   = train_dl,
-                                     valid_dl   = valid_dl,
-                                     writer     = writer,
-                                     plotter    = rm_plotter,
-                                     max_epochs = args.max_epochs,
-                                     save_loc   = save_loc,
-                                     do_health_check = args.do_health_check,
-                                     detect_local_minima = args.detect_local_minima,
-                                     load_checkpoint=(not args.restart))
+    writer, rm_plotter = prep_tensorboard(
+        save_loc, plotter_dict, args.restart, use_tb=args.use_tensorboard
+        )
+
+    run_mng = run_manager.RunManager(
+        model      = model,
+        objective  = objective,
+        optimizer  = optimizer,
+        scheduler  = sched,
+        train_dl   = train_dl,
+        valid_dl   = valid_dl,
+        writer     = writer,
+        plotter    = rm_plotter,
+        max_epochs = args.max_epochs,
+        save_loc   = save_loc,
+        do_health_check = args.do_health_check,
+        detect_local_minimum = args.detect_local_minimum,
+        load_checkpoint = (not args.restart)
+        )
 
     run_mng.run()
         
     save_figs(save_loc, run_mng.model, run_mng.valid_dl, plotter_dict)
-    pickle.dump(run_mng.loss_dict, open(os.path.join(save_loc, 'loss.pkl'), 'wb'))
-    
+
+    with open(Path(save_loc, 'loss.pkl'), 'wb') as f:
+        pkl.dump(run_mng.loss_dict, f)
+
     if args.orion:
         from orion.client import report_results, report_objective
         
-        report_results([{'name':'val_loss', 'type':'objective', 'value':run_mng.loss_dict['valid']['total'][-1]}])
-#         report_objective(run_mng.loss_dict['valid']['total'][-1], name='objective')
+        valid_loss = run_mng.loss_dict['valid']['total'][-1]
+        # valid_loss = run_mng.best
+
+        results_dict = {
+            'name' : 'val_loss', 
+            'type' : 'objective', 
+            'value': valid_loss,
+            }
+
+        report_results([results_dict])
+        # report_objective(valid_loss, name='objective')
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
-def prep_model(model_name, data_dict, data_suffix, batch_size, device, hyperparams):
-    print(model_name)
-    if model_name == 'lfads':
-        train_dl, valid_dl, input_dims, plotter_dict = prep_data(data_dict=data_dict, data_suffix=data_suffix, batch_size=batch_size, device=device)
-        model, objective = prep_lfads(input_dims = input_dims,
-                                      hyperparams=hyperparams,
-                                      device= device,
-                                      dtype=train_dl.dataset.tensors[0].dtype,
-                                      dt= data_dict['dt']
-                                      )
-        
-    elif model_name == 'lfads-gaussian':
-        train_dl, valid_dl, input_dims, plotter_dict = prep_data(data_dict=data_dict, data_suffix=data_suffix, batch_size=batch_size, device=device)
-        model, objective = prep_lfads_gaussian(input_dims = input_dims,
-                                               hyperparams = hyperparams,
-                                               device= device,
-                                               dtype=train_dl.dataset.tensors[0].dtype
-                                              )
-        
-    elif model_name == 'svlae':
-        train_dl, valid_dl, input_dims, plotter_dict = prep_data(data_dict=data_dict, data_suffix=data_suffix, batch_size=batch_size, device=device)
-        
-        if 'obs_gain_init' in data_dict.keys():
-            print('gain= %.4f'%data_dict['obs_gain_init'].mean())
-            hyperparams['model']['obs']['gain']['value'] = data_dict['obs_gain_init']
-        if 'obs_bias_init' in data_dict.keys():
-            print('bias= %.4f'%data_dict['obs_bias_init'].mean())
-            hyperparams['model']['obs']['bias']['value'] = data_dict['obs_bias_init']
-        if 'obs_var_init' in data_dict.keys():
-            print('var= %.4f'%data_dict['obs_var_init'].mean())
-            hyperparams['model']['obs']['var']['value'] = data_dict['obs_var_init']
-        if 'obs_tau_init' in data_dict.keys():
-            print('tau= %.4f'%data_dict['obs_tau_init'].mean())
-            hyperparams['model']['obs']['tau']['value'] = data_dict['obs_tau_init']
-        
-        model, objective = prep_svlae(input_dims = input_dims,
-                                      hyperparams=hyperparams,
-                                      device= device,
-                                      dtype=train_dl.dataset.tensors[0].dtype,
-                                      dt=data_dict['dt']
-                                      )
-    elif model_name == 'valpaca':
-        train_dl, valid_dl, input_dims, plotter_dict = prep_data(data_dict=data_dict, data_suffix=data_suffix, batch_size=batch_size, device=device)
-        
-#         g, var = estimate_ar1_parameters(data_dict['train_fluor'])
-#         gain = np.sqrt(var)*hyperparams['model']['obs']['snr']
-        
-#         hyperparams['model']['obs']['gain']['value'] = gain
-#         hyperparams['model']['obs']['tau']['value'] = -data_dict['dt']/np.log(g)
-#         hyperparams['model']['obs']['var']['value'] = var
-        
-#         print(np.median(hyperparams['model']['obs']['gain']['value']),
-#               np.median(hyperparams['model']['obs']['var']['value']),
-#               np.median(hyperparams['model']['obs']['tau']['value']))
-        
-        if 'obs_gain_init' in data_dict.keys():
-            print('gain= %.4f'%data_dict['obs_gain_init'].mean())
-            hyperparams['model']['obs']['gain']['value'] = data_dict['obs_gain_init']
-        if 'obs_bias_init' in data_dict.keys():
-            print('bias= %.4f'%data_dict['obs_bias_init'].mean())
-            hyperparams['model']['obs']['bias']['value'] = data_dict['obs_bias_init']
-        if 'obs_var_init' in data_dict.keys():
-            print('var= %.4f'%data_dict['obs_var_init'].mean())
-            hyperparams['model']['obs']['var']['value'] = data_dict['obs_var_init']
-        if 'obs_tau_init' in data_dict.keys():
-            print('tau= %.4f'%data_dict['obs_tau_init'].mean())
-            hyperparams['model']['obs']['tau']['value'] = data_dict['obs_tau_init']
+def prep_model(data_dict, hyperparams, model_name='valpaca', 
+               data_suffix='data', batch_size=None, device='cpu', 
+               log_model=False):
+    
+    model_str = f'\n{model_name.capitalize()} model parameters:'
+
+    train_dl, valid_dl, input_dims, plotter_dict = prep_data(
+        data_dict=data_dict, 
+        data_suffix=data_suffix, 
+        batch_size=batch_size, 
+        device=device
+        )
+
+    if model_name in ['lfads', 'lfads-gaussian']:
+        model, obj = prep_lfads(
+            input_dims=input_dims,
+            hyperparams=hyperparams,
+            dt=data_dict['dt'],
+            gauss=(model_name == 'lfads-gaussian'),
+            device=device,
+            )
                 
-        model, objective = prep_valpaca(input_dims = input_dims,
-                                        hyperparams=hyperparams,
-                                        device= device,
-                                        dtype=train_dl.dataset.tensors[0].dtype,
-                                        dt=data_dict['dt']
-                                        )
-        
+    elif model_name in ['svlae', 'valpaca']:
+        for val_name in ['gain', 'bias', 'var', 'tau']:
+            key = f'obs_{val_name}_init'
+            if key in data_dict.keys():
+                vals = data_dict[key]
+                model_str = f'{model_str}\n{val_name}={vals.mean():.4f}'
+                hyperparams['model']['obs'][val_name]['value'] = vals
+        model_str = f"{model_str}\n"
+
+        model, obj = prep_svlae_valpaca(
+            input_dims=input_dims,
+            hyperparams=hyperparams,
+            dt=data_dict['dt'],
+            model_name=model_name,
+            device=device,
+            )
+            
     else:
-        raise NotImplementedError('Model must be one of \'lfads\', \'lfads-gaussian\', \'svlae\', or \'valpaca\'')
-        
-    return train_dl, valid_dl, plotter_dict, model, objective
+        raise NotImplementedError(
+            'Model must be one of \'lfads\', \'lfads-gaussian\', \'svlae\', '
+            'or \'valpaca\'.'
+            )
+
+    if log_model:
+        logger.info(f'{model_str}')
+        log_model_description(model)
+ 
+
+    return train_dl, valid_dl, plotter_dict, model, obj
     
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
         
-def prep_lfads(input_dims, hyperparams, device, dtype, dt):
+def prep_lfads(input_dims, hyperparams, dt, gauss=False, device='cpu'):
     from models import objective, lfads
 
-    model = lfads.LFADS_SingleSession_Net(input_size           = input_dims,
-                                          factor_size          = hyperparams['model']['factor_size'],
-                                          g_encoder_size       = hyperparams['model']['g_encoder_size'],
-                                          c_encoder_size       = hyperparams['model']['c_encoder_size'],
-                                          g_latent_size        = hyperparams['model']['g_latent_size'],
-                                          u_latent_size        = hyperparams['model']['u_latent_size'],
-                                          controller_size      = hyperparams['model']['controller_size'],
-                                          generator_size       = hyperparams['model']['generator_size'],
-                                          prior                = hyperparams['model']['prior'],
-                                          clip_val             = hyperparams['model']['clip_val'],
-                                          dropout              = hyperparams['model']['dropout'],
-                                          do_normalize_factors = hyperparams['model']['normalize_factors'],
-                                          max_norm             = hyperparams['model']['max_norm'],
-                                          obs                  = 'poisson',
-                                          device               = device).to(device)
+    obs = 'gaussian' if gauss else 'poisson'
+
+    model = lfads.LFADS_SingleSession_Net(
+        input_size           = input_dims,
+        factor_size          = hyperparams['model']['factor_size'],
+        g_encoder_size       = hyperparams['model']['g_encoder_size'],
+        c_encoder_size       = hyperparams['model']['c_encoder_size'],
+        g_latent_size        = hyperparams['model']['g_latent_size'],
+        u_latent_size        = hyperparams['model']['u_latent_size'],
+        controller_size      = hyperparams['model']['controller_size'],
+        generator_size       = hyperparams['model']['generator_size'],
+        prior                = hyperparams['model']['prior'],
+        clip_val             = hyperparams['model']['clip_val'],
+        dropout              = hyperparams['model']['dropout'],
+        do_normalize_factors = hyperparams['model']['normalize_factors'],
+        max_norm             = hyperparams['model']['max_norm'],
+        obs                  = obs,
+        device               = device
+        ).to(device)
     
     loglikelihood = objective.LogLikelihoodPoisson(dt=float(dt))
 
-    obj = objective.LFADS_Loss(loglikelihood            = loglikelihood,
-                               loss_weight_dict         = {'kl': hyperparams['objective']['kl'], 
-                                                           'l2': hyperparams['objective']['l2']},
-                               l2_con_scale             = hyperparams['objective']['l2_con_scale'],
-                               l2_gen_scale             = hyperparams['objective']['l2_gen_scale']).to(device)
+    obj = objective.LFADS_Loss(
+        loglikelihood    = loglikelihood,
+        loss_weight_dict = {'kl': hyperparams['objective']['kl'], 
+                            'l2': hyperparams['objective']['l2']},
+        l2_con_scale     = hyperparams['objective']['l2_con_scale'],
+        l2_gen_scale     = hyperparams['objective']['l2_gen_scale']
+        ).to(device)
 
     return model, obj
-    
-#-------------------------------------------------------------------
-#-------------------------------------------------------------------
-
-def prep_lfads_gaussian(input_dims, hyperparams, device, dtype=None):
-    from models import objective, lfads
-    
-    model = lfads.LFADS_SingleSession_Net(input_size           = input_dims,
-                                          factor_size          = hyperparams['model']['factor_size'],
-                                          g_encoder_size       = hyperparams['model']['g_encoder_size'],
-                                          c_encoder_size       = hyperparams['model']['c_encoder_size'],
-                                          g_latent_size        = hyperparams['model']['g_latent_size'],
-                                          u_latent_size        = hyperparams['model']['u_latent_size'],
-                                          controller_size      = hyperparams['model']['controller_size'],
-                                          generator_size       = hyperparams['model']['generator_size'],
-                                          prior                = hyperparams['model']['prior'],
-                                          clip_val             = hyperparams['model']['clip_val'],
-                                          dropout              = hyperparams['model']['dropout'],
-                                          do_normalize_factors = hyperparams['model']['normalize_factors'],
-                                          max_norm             = hyperparams['model']['max_norm'],
-                                          obs                  = 'gaussian',
-                                          device               = device).to(device)
-        
-    loglikelihood = objective.LogLikelihoodGaussian()
-    
-    obj = objective.LFADS_Loss(loglikelihood            = loglikelihood,
-                               loss_weight_dict         = {'kl': hyperparams['objective']['kl'], 
-                                                           'l2': hyperparams['objective']['l2']},
-                               l2_con_scale             = hyperparams['objective']['l2_con_scale'],
-                               l2_gen_scale             = hyperparams['objective']['l2_gen_scale']).to(device)
-    
-    return model, obj
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
     
-def prep_svlae(input_dims, hyperparams, device, dtype, dt):
-    from models import objective, svlae
+def prep_svlae_valpaca(input_dims, hyperparams, dt, model_name='valpaca', 
+                       device='cpu'):
+    from models import objective, svlae, valpaca
 
     loglikelihood_obs  = objective.LogLikelihoodGaussian()
     loglikelihood_deep = objective.LogLikelihoodPoissonSimplePlusL1(dt=float(dt))
     
-    obj = objective.SVLAE_Loss(loglikelihood_obs        = loglikelihood_obs,
-                               loglikelihood_deep       = loglikelihood_deep,
-                               loss_weight_dict         = {'kl_deep'    : hyperparams['objective']['kl_deep'],
-                                                           'kl_obs'     : hyperparams['objective']['kl_obs'],
-                                                           'l2'         : hyperparams['objective']['l2'],
-                                                           'recon_deep' : hyperparams['objective']['recon_deep']},
-                               l2_con_scale             = hyperparams['objective']['l2_con_scale'],
-                               l2_gen_scale             = hyperparams['objective']['l2_gen_scale']).to(device)
+    obj = objective.SVLAE_Loss(
+        loglikelihood_obs  = loglikelihood_obs,
+        loglikelihood_deep = loglikelihood_deep,
+        loss_weight_dict   = {'kl_deep'    : hyperparams['objective']['kl_deep'],
+                              'kl_obs'     : hyperparams['objective']['kl_obs'],
+                              'l2'         : hyperparams['objective']['l2'],
+                              'recon_deep' : hyperparams['objective']['recon_deep']},
+        l2_con_scale       = hyperparams['objective']['l2_con_scale'],
+        l2_gen_scale       = hyperparams['objective']['l2_gen_scale']
+        ).to(device)
     
-    hyperparams['model']['obs']['tau']['value']/=float(dt)
+    hyperparams['model']['obs']['tau']['value'] /= float(dt)
     
-    model = svlae.SVLAE_Net(input_size            = input_dims,
-                            factor_size           = hyperparams['model']['factor_size'],
-                            obs_encoder_size      = hyperparams['model']['obs_encoder_size'],
-                            obs_latent_size       = hyperparams['model']['obs_latent_size'],
-                            obs_controller_size   = hyperparams['model']['obs_controller_size'],
-                            deep_g_encoder_size   = hyperparams['model']['deep_g_encoder_size'],
-                            deep_c_encoder_size   = hyperparams['model']['deep_c_encoder_size'],
-                            deep_g_latent_size    = hyperparams['model']['deep_g_latent_size'],
-                            deep_u_latent_size    = hyperparams['model']['deep_u_latent_size'],
-                            deep_controller_size  = hyperparams['model']['deep_controller_size'],
-                            generator_size        = hyperparams['model']['generator_size'],
-                            prior                 = hyperparams['model']['prior'],
-                            clip_val              = hyperparams['model']['clip_val'],
-                            generator_burn        = hyperparams['model']['generator_burn'],
-                            dropout               = hyperparams['model']['dropout'],
-                            do_normalize_factors  = hyperparams['model']['normalize_factors'],
-                            factor_bias           = hyperparams['model']['factor_bias'],
-                            max_norm              = hyperparams['model']['max_norm'],
-                            deep_unfreeze_step    = hyperparams['model']['deep_unfreeze_step'],
-                            obs_params            = hyperparams['model']['obs'],
-                            device                = device).to(device)
-    
-    return model, objective
+    if model_name == 'svlae':
+        model_fct = svlae.SVLAE_Net
+        extra_kwargs = dict()
+    elif model_name == 'valpaca':
+        model_fct = valpaca.VaLPACa_Net   
+        extra_kwargs = {'obs_pad': hyperparams['model']['obs_pad']}
+    else:
+        raise ValueError('model_name must be \'svlae\' or \'valpaca\'.')
 
-#-------------------------------------------------------------------
-#-------------------------------------------------------------------
-    
-def prep_valpaca(input_dims, hyperparams, device, dtype, dt):
-    from models import objective, valpaca
-
-    loglikelihood_obs  = objective.LogLikelihoodGaussian()
-    loglikelihood_deep = objective.LogLikelihoodPoissonSimplePlusL1(dt=float(dt))
-    
-    obj = objective.SVLAE_Loss(loglikelihood_obs        = loglikelihood_obs,
-                               loglikelihood_deep       = loglikelihood_deep,
-                               loss_weight_dict         = {'kl_deep'    : hyperparams['objective']['kl_deep'],
-                                                           'kl_obs'     : hyperparams['objective']['kl_obs'],
-                                                           'l2'         : hyperparams['objective']['l2'],
-                                                           'recon_deep' : hyperparams['objective']['recon_deep']},
-                               l2_con_scale             = hyperparams['objective']['l2_con_scale'],
-                               l2_gen_scale             = hyperparams['objective']['l2_gen_scale']).to(device)
-    
-    hyperparams['model']['obs']['tau']['value']/=float(dt)
-    
-    model = valpaca.VaLPACa_Net(input_size            = input_dims,
-                                factor_size           = hyperparams['model']['factor_size'],
-                                obs_encoder_size      = hyperparams['model']['obs_encoder_size'],
-                                obs_latent_size       = hyperparams['model']['obs_latent_size'],
-                                obs_controller_size   = hyperparams['model']['obs_controller_size'],
-                                deep_g_encoder_size   = hyperparams['model']['deep_g_encoder_size'],
-                                deep_c_encoder_size   = hyperparams['model']['deep_c_encoder_size'],
-                                deep_g_latent_size    = hyperparams['model']['deep_g_latent_size'],
-                                deep_u_latent_size    = hyperparams['model']['deep_u_latent_size'],
-                                deep_controller_size  = hyperparams['model']['deep_controller_size'],
-                                generator_size        = hyperparams['model']['generator_size'],
-                                prior                 = hyperparams['model']['prior'],
-                                clip_val              = hyperparams['model']['clip_val'],
-                                obs_pad               = hyperparams['model']['obs_pad'],
-                                generator_burn        = hyperparams['model']['generator_burn'],
-                                dropout               = hyperparams['model']['dropout'],
-                                do_normalize_factors  = hyperparams['model']['normalize_factors'],
-                                factor_bias           = hyperparams['model']['factor_bias'],
-                                max_norm              = hyperparams['model']['max_norm'],
-                                deep_unfreeze_step    = hyperparams['model']['deep_unfreeze_step'],
-                                obs_params            = hyperparams['model']['obs'],
-                                device                = device).to(device)
+    model = model_fct(
+        input_size            = input_dims,
+        factor_size           = hyperparams['model']['factor_size'],
+        obs_encoder_size      = hyperparams['model']['obs_encoder_size'],
+        obs_latent_size       = hyperparams['model']['obs_latent_size'],
+        obs_controller_size   = hyperparams['model']['obs_controller_size'],
+        deep_g_encoder_size   = hyperparams['model']['deep_g_encoder_size'],
+        deep_c_encoder_size   = hyperparams['model']['deep_c_encoder_size'],
+        deep_g_latent_size    = hyperparams['model']['deep_g_latent_size'],
+        deep_u_latent_size    = hyperparams['model']['deep_u_latent_size'],
+        deep_controller_size  = hyperparams['model']['deep_controller_size'],
+        generator_size        = hyperparams['model']['generator_size'],
+        prior                 = hyperparams['model']['prior'],
+        clip_val              = hyperparams['model']['clip_val'],
+        generator_burn        = hyperparams['model']['generator_burn'],
+        dropout               = hyperparams['model']['dropout'],
+        do_normalize_factors  = hyperparams['model']['normalize_factors'],
+        factor_bias           = hyperparams['model']['factor_bias'],
+        max_norm              = hyperparams['model']['max_norm'],
+        deep_unfreeze_step    = hyperparams['model']['deep_unfreeze_step'],
+        obs_params            = hyperparams['model']['obs'],
+        device                = device,
+        **extra_kwargs
+        ).to(device)
     
     return model, obj
-    
-#-------------------------------------------------------------------
-#-------------------------------------------------------------------
-    
-def prep_data(data_dict, data_suffix, batch_size, device):
-    train_data  = torch.Tensor(data_dict['train_%s'%data_suffix]).to(device)
-    valid_data  = torch.Tensor(data_dict['valid_%s'%data_suffix]).to(device)
-    
-    num_trials, num_steps, input_size = train_data.shape
-    
-    train_ds    = torch.utils.data.TensorDataset(train_data)
-    valid_ds    = torch.utils.data.TensorDataset(valid_data)
-    
-    train_dl    = torch.utils.data.DataLoader(train_ds, batch_size = batch_size, shuffle=True)
-    valid_dl    = torch.utils.data.DataLoader(valid_ds, batch_size = valid_data.shape[0])
-    
-    TIME = np.arange(0, num_steps*data_dict['dt'], data_dict['dt'])
-    
-    train_truth = {}
-    if 'train_rates' in data_dict.keys():
-        train_truth['rates'] = data_dict['train_rates']
-    if 'train_latent' in data_dict.keys():
-        train_truth['latent'] = data_dict['train_latent']
-    if 'valid_spikes' in data_dict.keys():
-        train_truth['spikes'] = data_dict['train_spikes']
-        
-    valid_truth = {}
-    if 'valid_rates' in data_dict.keys():
-        valid_truth['rates'] = data_dict['valid_rates']
-    if 'valid_latent' in data_dict.keys():
-        valid_truth['latent'] = data_dict['valid_latent']
-    if 'valid_spikes' in data_dict.keys():
-        valid_truth['spikes'] = data_dict['valid_spikes']
 
-    plotter_dict = {'train' : plotter.Plotter(time=TIME, truth=train_truth),
-                    'valid' : plotter.Plotter(time=TIME, truth=valid_truth)}
+#-------------------------------------------------------------------
+#-------------------------------------------------------------------
+    
+def prep_data(data_dict, data_suffix='data', batch_size=None, device='cpu'):
+
+    if f'train_{data_suffix}' not in data_dict.keys():
+        raise ValueError(
+            f'\'{data_suffix}\' data_suffix not found in the data keys.'
+            )
+
+    train_data  = torch.Tensor(data_dict[f'train_{data_suffix}']).to(device)
+    valid_data  = torch.Tensor(data_dict[f'valid_{data_suffix}']).to(device)
+    
+    _, num_steps, input_size = train_data.shape
+    
+    train_ds = torch.utils.data.TensorDataset(train_data)
+    valid_ds = torch.utils.data.TensorDataset(valid_data)
+    
+    train_dl = torch.utils.data.DataLoader(
+        train_ds, batch_size=batch_size, shuffle=True
+        )
+    valid_dl = torch.utils.data.DataLoader(
+        valid_ds, batch_size=valid_data.shape[0]
+        )
+    
+    time = np.arange(0, num_steps*data_dict['dt'], data_dict['dt'])
+    
+    train_grdtruth = dict()
+    for data_type in ['rates', 'latent', 'spikes']:
+        if f'train_{data_type}' in data_dict.keys():
+            train_grdtruth[data_type] = data_dict[f'train_{data_type}']
+        
+    valid_grdtruth = dict()
+    for data_type in ['rates', 'latent', 'spikes']:
+        if f'valid_{data_type}' in data_dict.keys():
+            train_grdtruth[data_type] = data_dict[f'valid_{data_type}']
+
+    plotter_dict = {
+        'train': plotter.Plotter(time=time, grdtruth=train_grdtruth),
+        'valid': plotter.Plotter(time=time, grdtruth=valid_grdtruth)
+        }
     
     return train_dl, valid_dl, input_size, plotter_dict
 
@@ -391,46 +298,59 @@ def prep_data(data_dict, data_suffix, batch_size, device):
 
 def prep_optimizer(model, hyperparams):
     
-    optimizer = opt.Adam([p for p in model.parameters() if p.requires_grad],
-                         lr=hyperparams['optimizer']['lr_init'],
-                         betas=(hyperparams['optimizer']['beta1'],hyperparams['optimizer']['beta2']),
-                         eps=hyperparams['optimizer']['eps'])
+    betas = (
+        hyperparams['optimizer']['beta1'], 
+        hyperparams['optimizer']['beta2']
+        )
+
+    optimizer = opt.Adam(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=hyperparams['optimizer']['lr_init'],
+        betas=betas,
+        eps=hyperparams['optimizer']['eps'])
     
-    sched = scheduler.LFADS_Scheduler(optimizer      = optimizer,
-                                      mode           = 'min',
-                                      factor         = hyperparams['scheduler']['scheduler_factor'],
-                                      patience       = hyperparams['scheduler']['scheduler_patience'],
-                                      verbose        = True,
-                                      threshold      = 1e-4,
-                                      threshold_mode = 'abs',
-                                      cooldown       = hyperparams['scheduler']['scheduler_cooldown'],
-                                      min_lr         = hyperparams['scheduler']['lr_min'])
-        
+    sched = scheduler.LFADS_Scheduler(
+        optimizer      = optimizer,
+        mode           = 'min',
+        factor         = hyperparams['scheduler']['scheduler_factor'],
+        patience       = hyperparams['scheduler']['scheduler_patience'],
+        verbose        = True,
+        threshold      = 1e-4,
+        threshold_mode = 'abs',
+        cooldown       = hyperparams['scheduler']['scheduler_cooldown'],
+        min_lr         = hyperparams['scheduler']['lr_min']
+        )
+
     return optimizer, sched
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
 
-def print_model_description(model):
+def log_model_description(model):
     total_params = 0
+    param_items = []
     for ix, (name, param) in enumerate(model.named_parameters()):
-        print(ix, name, list(param.shape), param.numel(), param.requires_grad)
+        param_items.append(
+            f'{ix} {name} {list(param.shape)} '
+            f'{param.numel()} {param.requires_grad}'
+            )
         total_params += param.numel()
     
-    print('Total parameters: %i'%total_params)
+    param_str = '\n'.join(param_items)
+    
+    logger.info(f'{param_str}\nTotal number of parameters: {total_params}\n')
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
 
-def prep_tensorboard(save_loc, plotter_dict, restart):
+def prep_tensorboard(save_loc, plotter_dict, restart=True, use_tb=True):
+
     import importlib
-    if importlib.util.find_spec('torch.utils.tensorboard'):
-        tb_folder = os.path.join(save_loc, 'tensorboard')
-        if not os.path.exists(tb_folder):
-            os.mkdir(tb_folder)
-        elif os.path.exists(tb_folder) and restart:
-            os.system('rm -rf %s'%tb_folder)
-            os.mkdir(tb_folder)
+    if use_tb and importlib.util.find_spec('torch.utils.tensorboard'):
+        tb_folder = Path(save_loc, 'tensorboard')
+        if tb_folder.is_dir() and restart:
+            shutil.rmtree(str(tb_folder))
+        tb_folder.mkdir(exist_ok=True, parents=True)
 
         from torch.utils.tensorboard import SummaryWriter
         writer = SummaryWriter(tb_folder)
@@ -444,103 +364,145 @@ def prep_tensorboard(save_loc, plotter_dict, restart):
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
 
-def adjust_hyperparams(args, hyperparams):
+def adjust_hyperparams(args, hyperparams, log_changed=True):
 
-    hp_string = ''
+    hyperparams = copy.deepcopy(hyperparams)
+
+    # Shared hyperparameters
+    shared_hps = []
+    if hyperparams['model']['deep_width'] is not None:
+        deep_width = hyperparams['model']['deep_width']
+        if 'obs' in hyperparams['model'].keys(): # valpaca or svlae
+            hyperparams['model']['deep_g_encoder_size'] = deep_width
+            hyperparams['model']['deep_c_encoder_size'] = deep_width
+            shared_hps.append(f'deep_g_encoder_size={deep_width}')
+            shared_hps.append(f'deep_c_encoder_size={deep_width}')
+
+        else: # lfads
+            hyperparams['model']['g_encoder_size'] = deep_width
+            hyperparams['model']['c_encoder_size'] = deep_width
+            shared_hps.append(f'g_encoder_size={deep_width}')
+            shared_hps.append(f'c_encoder_size={deep_width}')
+    
+    if ('obs' in hyperparams['model'].keys() and 
+        hyperparams['model']['obs_width'] is not None): # valpaca or svlae
+        
+        obs_width = hyperparams['model']['obs_width']
+        hyperparams['model']['obs_controller_size'] = obs_width
+        hyperparams['model']['obs_encoder_size'] = obs_width
+        shared_hps.append(f'obs_controller_size={obs_width}')
+        shared_hps.append(f'obs_encoder_size={obs_width}')
+
+    # Other hyperparameters
+    hps = []
     if args.lr:
         lr = args.lr
         hyperparams['optimizer']['lr_init'] = lr
         hyperparams['scheduler']['lr_min']  = lr * 1e-3
-        hp_string += 'lr= %.4f\n'%lr
+        hps.append(f'lr={lr:.4f}')
         
     if args.kl_obs_dur:
-        hyperparams['objective']['kl_obs']['schedule_dur'] = args.kl_obs_dur * args.kl_obs_dur_scale
-        hp_string += 'kl_obs_dur= %i\n'%(args.kl_obs_dur*args.kl_obs_dur_scale)
+        sched_dur = int(args.kl_obs_dur * args.kl_obs_dur_scale)
+        hyperparams['objective']['kl_obs']['schedule_dur'] = sched_dur
+        hps.append(f'kl_obs_dur={sched_dur}')
 
     if args.kl_obs_max:
         hyperparams['objective']['kl_obs']['max'] = args.kl_obs_max
-        hp_string += 'kl_obs_max= %.3f\n'%(args.kl_obs_max)
+        hps.append(f'kl_obs_max={args.kl_obs_max:.3f}')
         
     if args.kl_deep_max:
         hyperparams['objective']['kl_deep']['max'] = args.kl_deep_max
-        hp_string += 'kl_deep_max= %.3f\n'%(args.kl_deep_max)
+        hps.append(f'kl_deep_max={args.kl_deep_max:.3f}')
     
     if args.deep_start_p:
-        deep_start = int(args.deep_start_p * args.deep_start_p_scale * hyperparams['objective']['kl_obs']['schedule_dur'])
+        deep_start = int(args.deep_start_p * args.deep_start_p_scale * \
+            hyperparams['objective']['kl_obs']['schedule_dur'])
         hyperparams['objective']['kl_deep']['schedule_start'] = deep_start
         hyperparams['objective']['l2']['schedule_start'] = deep_start
         hyperparams['model']['deep_unfreeze_step'] = deep_start
-        hp_string += 'deep_start= %i\n'%deep_start
+        hps.append(f'deep_start={deep_start}')
         
     if args.l2_gen_scale:
         l2_gen_scale = args.l2_gen_scale
         hyperparams['objective']['l2_gen_scale'] = l2_gen_scale
-        hp_string += 'l2_gen_scale= %.3f\n'%l2_gen_scale
+        hps.append(f'l2_gen_scale={l2_gen_scale:.3f}')
     
     if args.l2_con_scale:
         l2_con_scale = args.l2_con_scale
         hyperparams['objective']['l2_con_scale'] = l2_con_scale
-        hp_string += 'l2_con_scale= %.3f\n'%l2_con_scale
+        hps.append(f'l2_con_scale={l2_con_scale:.3f}')
     
     if args.seed:
-        hp_string += 'seed= %s'%args.seed
+        hps.append(f'seed={args.seed}')
 
-    if hyperparams['model']['deep_width'] is not None:
-        if "obs" in hyperparams['model'].keys(): # valpaca or svlae
-            hyperparams['model']['deep_g_encoder_size'] = hyperparams['model']['deep_width']
-            hyperparams['model']['deep_c_encoder_size'] = hyperparams['model']['deep_width']
+    if log_changed:
+        # include all shared parameters in the log
+        hp_str_pr = '\n'.join(shared_hps + hps)
+        log_str = f'\nAdjusted hyperparameters:\n{hp_str_pr}'
+        logging.info(log_str)
 
-        else: # lfads
-            hyperparams['model']['g_encoder_size'] = hyperparams['model']['deep_width']
-            hyperparams['model']['c_encoder_size'] = hyperparams['model']['deep_width']
-    
-    if 'obs' in hyperparams['model'].keys() and hyperparams['model']['obs_width'] is not None: # valpaca or svlae
-        hyperparams['model']['obs_controller_size'] = hyperparams['model']['obs_width']
-        hyperparams['model']['obs_encoder_size'] = hyperparams['model']['obs_width']
-        
-    hp_string = hp_string.replace('\n', '-').replace(' ', '').replace('=', '')
-    hp_string = '_hp-'+ hp_string
-        
-    return hp_string, hyperparams
+    # don't include the shared parameters in the string
+    hp_str = '-'.join(hps).replace(' ', '').replace('=', '')
+    hp_str = f'hp-{hp_str}'
+
+    return hyperparams, hp_str
+
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
 
-def generate_save_loc(args, hyperparams, orion_hp_string):
-    data_name = args.data_path.split('/')[-1]
-    model_name = hyperparams['model_name']
+def generate_save_loc(model_params, data_path, output_dir, model_name='valpaca', 
+                      hp_str='hp-', log_save_loc=True):
+
+    data_name = Path(data_path).name
     if 'ospikes' in args.data_suffix:
-        model_name += '_oasis'
-    mhp_list = [key.replace('size', '').replace('deep', 'd').replace('obs', 'o').replace('_', '')[:4] + str(val) for key, val in hyperparams['model'].items() if 'size' in key]
-    mhp_list.sort()
-    hyperparams['run_name'] = '_'.join(mhp_list)
-    hyperparams['run_name'] += orion_hp_string
-    save_loc = '%s/%s/%s/%s/'%(args.output_dir, data_name, model_name, hyperparams['run_name'])
-    return save_loc, hyperparams
+        model_name = f'{model_name}_oasis'
+
+    srcs = ['size', 'deep', 'obs', '_']
+    targs = ['', 'd', 'o', '']
+    hp_list = []
+    for key, val in model_params.items():
+        if 'size' not in key:
+            continue
+        for src, targ in zip(srcs, targs):
+            key = key.replace(src, targ)
+        hp_list.append(f'{key[:4]}{val}')
+
+    run_name = '{}_{}'.format('_'.join(sorted(hp_list)), hp_str)
+    save_loc = Path(output_dir, data_name, model_name, run_name)
+
+    if log_save_loc:
+        logger.info(
+            f'\nModel training results will be saved under:\n{save_loc}.'
+            )
+    
+    return save_loc, run_name
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
     
 def save_figs(save_loc, model, dl, plotter_dict):
-    fig_folder = os.path.join(save_loc, 'figs')
+    fig_folder =Path(save_loc, 'figs')
     
-    if os.path.exists(fig_folder):
-        os.system('rm -rf %s'%fig_folder)
-    os.mkdir(fig_folder)
+    if fig_folder.is_dir():
+        shutil.rmtree(fig_folder)
+
+    fig_folder.mkdir(parents=True)
     
-    from matplotlib.figure import Figure
+    from matplotlib import pyplot as plt
     import matplotlib
+
     matplotlib.use('agg')
     fig_dict = plotter_dict['valid'].plot_summary(model= model, dl= dl)
     for k, v in fig_dict.items():
-        if type(v) == Figure:
-            v.savefig(os.path.join(fig_folder, f'{k}.svg'))
+        if isinstance(v, plt.Figure):
+            v.savefig(Path(fig_folder, f'{k}.svg'), bbox_inches="tight")
 
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
 
 def estimate_ar1_parameters(F, top_k=1):
-    n_trials, n_steps, n_cells = F.shape
+    _, _, n_cells = F.shape
     damp = np.zeros(n_cells)
     var = np.zeros(n_cells)
     for i in range(n_cells):
@@ -552,11 +514,52 @@ def estimate_ar1_parameters(F, top_k=1):
             g_tmp.append(g)
             sn_tmp.append(sn)
         damp[i] = np.median(g_tmp)
-        var[i] = np.median(sn_tmp)**2
+        var[i] = np.median(sn_tmp) ** 2
     return damp, var
             
 #-------------------------------------------------------------------
 #-------------------------------------------------------------------
 
 if __name__ == '__main__':
-    main()
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-d', '--data_path', type=Path)
+    parser.add_argument('-c', '--config', type=Path, 
+                        help='path to hyperparameters')
+
+    # optional parameters
+    parser.add_argument('-o', '--output_dir', default=None, type=Path, 
+                        help='data_path directory is used if output_dir is None'
+                        )
+    parser.add_argument('-m', '--model_name', default='valpaca')
+
+    parser.add_argument('-t', '--use_tensorboard', action='store_true')
+    parser.add_argument('-r', '--restart', action='store_true')
+    
+    parser.add_argument('--do_health_check', action='store_true')
+    parser.add_argument('--max_epochs', default=2000, type=int)
+    parser.add_argument('--batch_size', default=None, type=int)
+    parser.add_argument('--data_suffix', default='data', type=str)
+    parser.add_argument('--detect_local_minimum', action='store_true')
+
+    parser.add_argument('--lr', type=float, default=None)
+    parser.add_argument('--kl_deep_max', type=float, default=None)
+    parser.add_argument('--kl_obs_max', type=float, default=None)
+    parser.add_argument('--kl_obs_dur', type=int, default=None)
+    parser.add_argument('--kl_obs_dur_scale', type=int, default=1)
+    parser.add_argument('--deep_start_p', type=int, default=None)
+    parser.add_argument('--deep_start_p_scale', type=float, default=1.0)
+    parser.add_argument('--l2_gen_scale', type=float, default=None)
+    parser.add_argument('--l2_con_scale', type=float, default=None)
+
+    parser.add_argument('--orion', action='store_true')
+    parser.add_argument('--seed', type=int, default=None)
+    parser.add_argument('--log_level', default='info', 
+                        help='logging level, e.g., debug, info, error')
+
+    args = parser.parse_args()
+
+    logger = utils.get_logger_with_basic_format(level=args.log_level)
+
+    main(args)
+

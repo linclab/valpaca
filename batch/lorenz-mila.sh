@@ -27,7 +27,7 @@ PROJECTDIR=$HOME/valpaca
 HPDIR=$PROJECTDIR/hyperparameters/lorenz
 OUTDIR=$PROJECTDIR/models
 
-# python $PROJECTDIR/generate_synthetic_data.py -o $PROJECTDIR/synth_data -s $SEED -p $PROJECTDIR/synth_data/lorenz_params.yaml --dt_sys $DT_SYS --dt_spike $DT_CAL --sigma $SIGMA --rate_scale $RATE
+# python $PROJECTDIR/generate_synthetic_data.py -o $PROJECTDIR/synth_data -s $SEED -c $PROJECTDIR/synth_data/lorenz_params.yaml --dt_sys $DT_SYS --dt_spike $DT_CAL --sigma $SIGMA --rate_scale $RATE
 
 STATE=seed$SEED'_sys'$DT_SYS'_cal'$DT_CAL'_sig'$SIGMA'_base'$RATE
 BASEDATAPATH=$PROJECTDIR/synth_data/lorenz_$STATE
@@ -42,15 +42,15 @@ OU=ou_t0.3_s$OASIS_S
 AR1DATAPATH=$BASEDATAPATH'_'$AR1'_'$OU'_n'
 HILLDATAPATH=$BASEDATAPATH'_'$HILL'_'$OU'_n'
 
-# python $PROJECTDIR/train_model.py -m lfads -d $AR1DATAPATH -p $HPDIR/lfads.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix spikes
+# python $PROJECTDIR/train_model.py -m lfads -d $AR1DATAPATH -c $HPDIR/lfads.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix spikes
 
-# python $PROJECTDIR/train_model.py -m lfads -d $AR1DATAPATH -p $HPDIR/lfads.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $AR1'_'ospikes
-# python $PROJECTDIR/train_model.py -m lfads-gaussian -d $AR1DATAPATH -p $HPDIR/lfads-gaussian.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $AR1
-# python $PROJECTDIR/train_model.py -m valpaca -d $AR1DATAPATH -p $HPDIR/valpaca.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $AR1
+# python $PROJECTDIR/train_model.py -m lfads -d $AR1DATAPATH -c $HPDIR/lfads.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $AR1'_'ospikes
+# python $PROJECTDIR/train_model.py -m lfads-gaussian -d $AR1DATAPATH -c $HPDIR/lfads-gaussian.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $AR1
+# python $PROJECTDIR/train_model.py -m valpaca -d $AR1DATAPATH -c $HPDIR/valpaca.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $AR1
 
-# python $PROJECTDIR/train_model.py -m lfads -d $HILLDATAPATH -p $HPDIR/lfads.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $HILL'_'ospikes
-# python $PROJECTDIR/train_model.py -m lfads-gaussian -d $HILLDATAPATH -p $HPDIR/lfads-gaussian.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $HILL
-# python $PROJECTDIR/train_model.py -m valpaca -d $HILLDATAPATH -p $HPDIR/valpaca.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $HILL
+# python $PROJECTDIR/train_model.py -m lfads -d $HILLDATAPATH -c $HPDIR/lfads.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $HILL'_'ospikes
+# python $PROJECTDIR/train_model.py -m lfads-gaussian -d $HILLDATAPATH -c $HPDIR/lfads-gaussian.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $HILL
+# python $PROJECTDIR/train_model.py -m valpaca -d $HILLDATAPATH -c $HPDIR/valpaca.yaml -o $OUTDIR --batch_size 40 --max_epochs 2000 --data_suffix $HILL
 
 LFADS_MODEL_DESC=cenc0_cont0_fact3_genc64_gene64_glat64_ulat0_hp-/
 VALPACA_MODEL_DESC=dcen0_dcon0_dgen64_dgla64_dula0_fact3_gene64_ocon32_oenc32_olat64_hp-/

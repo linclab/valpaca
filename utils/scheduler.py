@@ -6,9 +6,10 @@ class LFADS_Scheduler(ReduceLROnPlateau):
                  verbose=False, threshold=1e-4, threshold_mode='rel',
                  cooldown=0, min_lr=0, eps=1e-8):
         
-        super(LFADS_Scheduler, self).__init__(optimizer=optimizer, mode=mode, factor=factor, patience=patience,
-                                              verbose=verbose, threshold=threshold, threshold_mode=threshold_mode,
-                                              cooldown=cooldown, min_lr=min_lr, eps=eps)
+        super(LFADS_Scheduler, self).__init__(
+            optimizer=optimizer, mode=mode, factor=factor, patience=patience,
+            verbose=verbose, threshold=threshold, threshold_mode=threshold_mode,
+            cooldown=cooldown, min_lr=min_lr, eps=eps)
         
         
     def step(self, metrics, epoch=None):
@@ -33,3 +34,5 @@ class LFADS_Scheduler(ReduceLROnPlateau):
             self.cooldown_counter = self.cooldown
             self.num_bad_epochs = 0
             self.best = self.mode_worse
+
+            

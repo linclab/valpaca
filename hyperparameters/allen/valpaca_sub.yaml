@@ -40,17 +40,17 @@ objective:
   
 model:
   factor_size: 32
-  obs_encoder_size: 128 # set/updated by obs_width if not null
+  # obs_encoder_size: 128 # set/updated by obs_width if not null
   obs_latent_size: 128
-  obs_controller_size: 128 # set/updated by obs_width if not null
-  deep_g_encoder_size: 128 # set/updated by deep_width if not null
-  deep_c_encoder_size: 128 # set/updated by deep_width if not null
+  # obs_controller_size: 128 # set/updated by obs_width if not null
+  # deep_g_encoder_size: 128 # set/updated by deep_width if not null
+  # deep_c_encoder_size: 128 # set/updated by deep_width if not null
   deep_g_latent_size: 64
   deep_u_latent_size: 1
-  deep_controller_size: 64
+  deep_controller_size: 64 #
   generator_size: 200
-  deep_width: 128
-  obs_width: 128
+  deep_width: 128 #
+  obs_width: 128 #
   obs:
     snr: 2.0
     gain: 

@@ -4,8 +4,9 @@ import torch.nn as nn
 class LFADS_GRUCell(nn.Module):
     
     '''
-    LFADS_GRUCell class. Implements the Gated Recurrent Unit (GRU) used in LFADS Encoders. More obvious
-    relation to the equations (see https://en.wikipedia.org/wiki/Gated_recurrent_unit), along with
+    LFADS_GRUCell class. Implements the Gated Recurrent Unit (GRU) used in 
+    LFADS Encoders. More obvious relation to the equations 
+    (see https://en.wikipedia.org/wiki/Gated_recurrent_unit), along with
     a hack to help learning
     
     __init__(self, input_size, hidden_size, forget_bias=1.0)
@@ -29,9 +30,13 @@ class LFADS_GRUCell(nn.Module):
         self._ru_size = hidden_size * 2
         
         # r, u = W([x, h]) + b
-        self.fc_xh_ru = nn.Linear(in_features= self._xh_size, out_features= self._ru_size)
+        self.fc_xh_ru = nn.Linear(
+            in_features=self._xh_size, out_features=self._ru_size
+            )
         # c = W([x, h*r]) + b
-        self.fc_xhr_c = nn.Linear(in_features= self._xh_size, out_features= self.hidden_size)
+        self.fc_xhr_c = nn.Linear(
+            in_features=self._xh_size, out_features=self.hidden_size
+            )
         
     def forward(self, x, h):
         '''
@@ -51,9 +56,11 @@ class LFADS_GRUCell(nn.Module):
         xh  = torch.cat([x, h], dim=1)
         
         # Compute reset gate and update gate vector
-        r,u = torch.split(self.fc_xh_ru(xh),
-                          split_size_or_sections=self.hidden_size,
-                          dim = 1)
+        r,u = torch.split(
+            self.fc_xh_ru(xh),
+            split_size_or_sections=self.hidden_size,
+            dim=1
+            )
         r,u = torch.sigmoid(r), torch.sigmoid(u + self.forget_bias)
         
         # Concatenate input and hadamard product of hidden state and reset gate
@@ -62,15 +69,17 @@ class LFADS_GRUCell(nn.Module):
         # Compute candidate hidden state
         c   = torch.tanh(self.fc_xhr_c(xrh))
         
-        # Return new hidden state as a function of update gate, current hidden state, and candidate hidden state
+        # Return new hidden state as a function of update gate, current hidden 
+        # state, and candidate hidden state
         return torch.mul(u, h) + torch.mul(1 - u, c)
     
 class LFADS_GenGRUCell(nn.Module):
     '''
-    LFADS_GenGRUCell class. Implements gated recurrent unit used in LFADS generator and controller. Same as
-    LFADS_GRUCell, but parameters transforming hidden state are kept separate for computing L2 cost (see 
-    bullet point 2 of section 1.9 in online methods). Also does not create parameters transforming inputs if 
-    no inputs exist.
+    LFADS_GenGRUCell class. Implements gated recurrent unit used in LFADS 
+    generator and controller. Same as LFADS_GRUCell, but parameters 
+    transforming hidden state are kept separate for computing L2 cost (see 
+    bullet point 2 of section 1.9 in online methods). Also does not create 
+    parameters transforming inputs if no inputs exist.
     
     __init__(self, input_size, hidden_size, forget_bias=1.0)
     '''
@@ -88,20 +97,35 @@ class LFADS_GenGRUCell(nn.Module):
         if self.input_size > 0:
             
             # rx ,ux = W(x) (No bias in tensorflow implementation)
-            self.fc_x_ru = nn.Linear(in_features= self.input_size, out_features= self._ru_size, bias=False)
+            self.fc_x_ru = nn.Linear(
+                in_features=self.input_size, 
+                out_features=self._ru_size, 
+                bias=False
+                )
             # cx = W(x) (No bias in tensorflow implementation)
-            self.fc_x_c  = nn.Linear(in_features= self.input_size, out_features= self.hidden_size, bias=False)
+            self.fc_x_c = nn.Linear(
+                in_features=self.input_size, 
+                out_features=self.hidden_size, 
+                bias=False
+                )
         
         # Create parameters transforming hidden state
         
         # rh, uh = W(h) + b
-        self.fc_h_ru = nn.Linear(in_features= self.hidden_size, out_features= self._ru_size)
+        self.fc_h_ru = nn.Linear(
+            in_features=self.hidden_size, 
+            out_features=self._ru_size
+            )
         # ch = W(h) + b
-        self.fc_rh_c = nn.Linear(in_features=self.hidden_size, out_features= self.hidden_size)
+        self.fc_rh_c = nn.Linear(
+            in_features=self.hidden_size, 
+            out_features=self.hidden_size
+            )
         
     def forward(self, x, h):
         '''
-        Forward method - Gated Recurrent Unit forward pass with forget bias, weight on inputs and hidden state kept separate.
+        Forward method - Gated Recurrent Unit forward pass with forget bias, 
+        weight on inputs and hidden state kept separate.
         
         forward(self, x, h):
         
@@ -115,17 +139,21 @@ class LFADS_GenGRUCell(nn.Module):
         
         # Calculate reset and update gates from input
         if self.input_size > 0 and x is not None:
-            r_x, u_x = torch.split(self.fc_x_ru(x),
-                                   split_size_or_sections=self.hidden_size,
-                                   dim = 1)
+            r_x, u_x = torch.split(
+                self.fc_x_ru(x),
+                split_size_or_sections=self.hidden_size,
+                dim=1
+                )
         else:
             r_x = 0
             u_x = 0
         
         # Calculate reset and update gates from hidden state
-        r_h, u_h = torch.split(self.fc_h_ru(h),
-                               split_size_or_sections=self.hidden_size,
-                               dim = 1)
+        r_h, u_h = torch.split(
+            self.fc_h_ru(h),
+            split_size_or_sections=self.hidden_size,
+            dim=1
+            )
         
         # Combine reset and updates gates from hidden state and input
         r = torch.sigmoid(r_x + r_h)
@@ -137,14 +165,21 @@ class LFADS_GenGRUCell(nn.Module):
         else:
             c_x = 0
         
-        # Calculate candidate hidden state from hadamard product of hidden state and reset gate
+        # Calculate candidate hidden state from hadamard product of hidden 
+        # state and reset gate
         c_rh = self.fc_rh_c(r * h)
         
         # Combine candidate hidden state vectors
         c = torch.tanh(c_x + c_rh)
         
-        # Return new hidden state as a function of update gate, current hidden state, and candidate hidden state
+        # Return new hidden state as a function of update gate, current 
+        # hidden state, and candidate hidden state
         return u * h + (1 - u) * c
     
     def hidden_weight_l2_norm(self):
-        return self.fc_h_ru.weight.norm(2).pow(2)/self.fc_h_ru.weight.numel() + self.fc_rh_c.weight.norm(2).pow(2)/self.fc_rh_c.weight.numel()
+        norm = \
+            self.fc_h_ru.weight.norm(2).pow(2) / self.fc_h_ru.weight.numel() + \
+                self.fc_rh_c.weight.norm(2).pow(2) / self.fc_rh_c.weight.numel()
+
+        return norm
+
