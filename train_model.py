@@ -86,8 +86,8 @@ def main(args):
     if args.orion:
         from orion.client import report_results, report_objective
         
-        valid_loss = run_mng.loss_dict['valid']['total'][-1]
-        # valid_loss = run_mng.best
+        # valid_loss = run_mng.loss_dict['valid']['total'][-1]
+        valid_loss = run_mng.best
 
         results_dict = {
             'name' : 'val_loss', 
@@ -370,28 +370,20 @@ def adjust_hyperparams(args, hyperparams, log_changed=True):
 
     # Shared hyperparameters
     shared_hps = []
-    if hyperparams['model']['deep_width'] is not None:
-        deep_width = hyperparams['model']['deep_width']
-        if 'obs' in hyperparams['model'].keys(): # valpaca or svlae
+    if hyperparams['model_name'] in ['svlae', 'valpaca']:
+        if hyperparams['model']['deep_width'] is not None:
+            deep_width = hyperparams['model']['deep_width']
             hyperparams['model']['deep_g_encoder_size'] = deep_width
             hyperparams['model']['deep_c_encoder_size'] = deep_width
             shared_hps.append(f'deep_g_encoder_size={deep_width}')
             shared_hps.append(f'deep_c_encoder_size={deep_width}')
-
-        else: # lfads
-            hyperparams['model']['g_encoder_size'] = deep_width
-            hyperparams['model']['c_encoder_size'] = deep_width
-            shared_hps.append(f'g_encoder_size={deep_width}')
-            shared_hps.append(f'c_encoder_size={deep_width}')
     
-    if ('obs' in hyperparams['model'].keys() and 
-        hyperparams['model']['obs_width'] is not None): # valpaca or svlae
-        
-        obs_width = hyperparams['model']['obs_width']
-        hyperparams['model']['obs_controller_size'] = obs_width
-        hyperparams['model']['obs_encoder_size'] = obs_width
-        shared_hps.append(f'obs_controller_size={obs_width}')
-        shared_hps.append(f'obs_encoder_size={obs_width}')
+        if hyperparams['model']['obs_width'] is not None: # valpaca or svlae        
+            obs_width = hyperparams['model']['obs_width']
+            hyperparams['model']['obs_controller_size'] = obs_width
+            hyperparams['model']['obs_encoder_size'] = obs_width
+            shared_hps.append(f'obs_controller_size={obs_width}')
+            shared_hps.append(f'obs_encoder_size={obs_width}')
 
     # Other hyperparameters
     hps = []
@@ -482,7 +474,7 @@ def generate_save_loc(model_params, data_path, output_dir, model_name='valpaca',
 #-------------------------------------------------------------------
     
 def save_figs(save_loc, model, dl, plotter_dict):
-    fig_folder =Path(save_loc, 'figs')
+    fig_folder = Path(save_loc, 'figs')
     
     if fig_folder.is_dir():
         shutil.rmtree(fig_folder)

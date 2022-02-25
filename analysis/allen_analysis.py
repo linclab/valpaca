@@ -98,8 +98,12 @@ def main(args):
     plot_examples(data_dict, latent_dict, trial_ix=15, savepath=savepath)
     
     # plot factor PCA
-    plot_save_factors_3d_all(
-        data_dict, latent_dict, Path(args.output_dir, 'factors_3d_plots'), 
+    n_dim = 2 if args.plot_2d else 3
+    plot_save_factors_all(
+        data_dict, latent_dict, 
+        output_dir=Path(args.output_dir, f'factors_{n_dim}d_plots'), 
+        shared_model=args.shared_model,
+        plot_2d=args.plot_2d,
         projections=args.projections, 
         folded=True, 
         seed=args.seed
@@ -155,6 +159,38 @@ def load_trial_data(data_dict, latent_dict=None):
     ori = ori.astype('int')
 
     return data, unexp, ori
+
+
+#############################################
+def get_thetas(compare_same_abc=True):
+
+    if compare_same_abc:
+        thetas = THETAS
+    else:
+        thetas = THETAS_MATCH_DU
+
+    return thetas
+
+
+#############################################
+def get_exp_theta(theta, compare_same_abc=True):
+
+    if compare_same_abc:
+        exp_theta = theta
+    else:
+        exp_theta = theta + 90
+    
+    return exp_theta
+
+#############################################
+def get_data_idxs_from_theta(unexp, ori, theta=0, compare_same_abc=True):
+
+    exp_theta = get_exp_theta(theta, compare_same_abc)
+
+    exp_idxs = np.logical_and(~unexp, ori==exp_theta)
+    unexp_idxs = np.logical_and(unexp, ori==theta)
+    
+    return exp_idxs, unexp_idxs, exp_theta
 
 
 ##--------DECODER FUNCTIONS--------##
@@ -403,27 +439,45 @@ def adjust_axes(ax, min_val=0, max_val=None, axis='both', lw=1, length=4,
     if axis not in ['x', 'y', 'both']:
         raise ValueError('axis must be \'x\', \'y\', or \'both\'.')
 
-    if axis in ['x', 'both']:
-        if max_val is None:
-            xmax = ax.get_xlim()[1]
-            max_val = np.around(
-                xmax, -int(np.floor(np.log10(np.absolute(xmax)) / n_sig))
-                )
-        xticks = [min_val, max_val]
-        ax.set_xticks(xticks)
-        ax.spines['bottom'].set_bounds(xticks)
-        ax.xaxis.set_tick_params(length=length, width=lw)
+    if axis == 'both':
+        axes = ['x', 'y']
+    else:
+        axes = [axis]
 
-    if axis in ['y', 'both']:
-        if max_val is None:
-            ymax = ax.get_ylim()[1]
-            max_val = np.around(
-                ymax, -int(np.floor(np.log10(np.absolute(ymax)) / n_sig))
-                )
-        yticks = [min_val, max_val]
-        ax.set_yticks(yticks)
-        ax.spines['left'].set_bounds(yticks)
-        ax.yaxis.set_tick_params(length=length, width=lw)
+    for axis in axes:
+        ticks = [min_val, max_val]
+        round_o = None
+        new_vals = [None, None]
+        for v, val in enumerate(ticks):
+            if val is not None:
+                continue
+            if axis == 'x':
+                new_vals[v] = ax.get_xlim()[v]
+            else:
+                new_vals[v] = ax.get_ylim()[v]
+            if n_sig is not None:
+                order = int(np.floor(np.log10(np.absolute(new_vals[v]))))
+                o = int(-order + n_sig - 1)
+                if round_o is None:
+                    round_o = o
+                elif o < 0:
+                    round_o = max(round_o, o)
+                else:
+                    round_o = min(round_o, o)
+
+        if round_o is not None:
+            for v, val in enumerate(new_vals):
+                if val is not None:
+                    ticks[v] = np.around(val, round_o)
+
+        if axis == 'x':    
+            ax.set_xticks(ticks)
+            ax.spines['bottom'].set_bounds(ticks)
+            ax.xaxis.set_tick_params(length=length, width=lw)
+        else:
+            ax.set_yticks(ticks)
+            ax.spines['left'].set_bounds(ticks)
+            ax.yaxis.set_tick_params(length=length, width=lw)
 
 
 #############################################
@@ -513,24 +567,27 @@ def plot_examples(data_dict, latent_dict, trial_ix=0, num_traces=8,
 
 ##--------PLOT PCA FACTORS--------##
 #############################################
-def plot_save_factors_3d_all(data_dict, latent_dict, 
-                             output_dir='factors_3d_plots', projections=False, 
-                             folded=True, seed=None):
+def plot_save_factors_all(data_dict, latent_dict, output_dir='factors_3d_plots', 
+                          shared_model=False, plot_2d=False, projections=False, 
+                          folded=True, seed=None, close=True):
 
     latents, unexp, ori = load_trial_data(data_dict, latent_dict)
 
-    basename = 'factors_3d_orisplit'
-    for compare_same_abc in [True, False]:
-        match = 'abc' if compare_same_abc else 'du'
-        basename_match = f'{basename}_match_{match}'
-        for plot_single_trials in [True, False]:
-            projections_str = '_withproj' if projections else ''
-            suffix = '_withtrials' if plot_single_trials else projections_str
-            savename = f'{basename_match}{suffix}'
+    n_dim = 2 if plot_2d else 3
 
-            fact_fig = plot_factors_3d_all_ori(
+    projections_str = '_withproj' if projections else ''
+    share_str = '_shared' if shared_model else ''
+    basename = f'factors_{n_dim}d_orisplit{share_str}'
+    for plot_single_trials in [False, True]:
+        suffix = '_withtrials' if plot_single_trials else projections_str
+        for compare_same_abc in [True, False]:
+            match = 'abc' if compare_same_abc else 'du'
+            savename = f'{basename}_match_{match}{suffix}'
+
+            fact_fig = plot_factors_all_ori(
                 latents, unexp, ori, compare_same_abc=compare_same_abc, 
                 plot_single_trials=plot_single_trials, 
+                shared_model=shared_model, plot_2d=plot_2d,
                 projections=projections, folded=folded, seed=seed
                 )
             
@@ -539,42 +596,62 @@ def plot_save_factors_3d_all(data_dict, latent_dict,
             fact_fig.savefig(
                 f'{savepath}.{SAVE_KWARGS["format"]}', **SAVE_KWARGS
                 )
-            
-    plt.close()
+    
+    if close:
+        plt.close("all")
 
 
 #############################################
-def plot_factors_3d_all_ori(latents, unexp, ori, compare_same_abc=True, 
-                            plot_single_trials=False, projections=False, 
-                            folded=True, seed=None):
+def plot_factors_all_ori(latents, unexp, ori, compare_same_abc=True, 
+                         plot_single_trials=False, shared_model=False, 
+                         plot_2d=False, projections=False, folded=True, 
+                         seed=None):
     
-    fig, ax_ups, ax_dns = init_factors_3d_fig(compare_same_abc=compare_same_abc)
+    fig, ax_ups, ax_dns = init_factors_fig(
+        compare_same_abc=compare_same_abc, plot_2d=plot_2d, 
+        shared_axes=shared_model
+        )
     
-    if compare_same_abc:
-        thetas = THETAS
-        exp_thetas_f = lambda x: x
-    else:
-        thetas = THETAS_MATCH_DU
-        exp_thetas_f = lambda x: (x + 90)
-        
+    # create model with full latents
+    model = None
+    if shared_model:
+        n_comps = 2 if plot_2d else 3
+        model = fit_PCA_Regression(
+            latents, 
+            num_components=n_comps,
+            seed=seed
+            )
+
+    thetas = get_thetas(compare_same_abc)
     for theta, ax_up, ax_dn in zip(thetas, ax_ups, ax_dns):
     
-        plot_factors_3d(
+        exp_idxs, unexp_idxs, exp_theta = get_data_idxs_from_theta(
+            unexp, ori, theta, compare_same_abc=compare_same_abc
+            )
+
+        plot_factors(
             latents,
-            np.logical_and(unexp, ori==theta),
-            np.logical_and(~unexp, ori==exp_thetas_f(theta)),
-            ax_up, ax_dn, 
+            exp_idxs,
+            unexp_idxs,
+            ax_up, 
+            ax_dn, 
+            model=model,
             plot_single_trials=plot_single_trials, 
+            plot_2d=plot_2d,
             projections=projections, 
             folded=folded, 
             seed=seed
             )
         
-        if theta == exp_thetas_f(theta):
+        if compare_same_abc:
             title = u'ABC: {}{}'.format(theta, DEG)
         else:
-            title = u'D/U: {}{}'.format(exp_thetas_f(theta), DEG)
+            title = u'D/U: {}{}'.format(exp_theta, DEG)
+
         ax_up.set_title(title, fontsize='x-large')
+
+    if plot_2d:
+        adjust_trajectory_axes(ax_ups, shared_axes=shared_model)
 
     adjust_distance_axes(ax_dns)
 
@@ -582,18 +659,24 @@ def plot_factors_3d_all_ori(latents, unexp, ori, compare_same_abc=True,
 
 
 #############################################
-def init_factors_3d_fig(compare_same_abc=True):
+def init_factors_fig(compare_same_abc=True, plot_2d=False, shared_axes=False):
     
+    if plot_2d:
+        subplot_kw = dict()
+    else:
+        subplot_kw = {'projection': '3d'}
+
+
     figsize = [8.75, 4.2]
     fig = plt.figure(figsize=figsize)
-    ax1 = fig.add_subplot(241, projection='3d')
-    ax2 = fig.add_subplot(242, projection='3d')
+    ax1 = fig.add_subplot(241, **subplot_kw)
+    ax2 = fig.add_subplot(242, **subplot_kw)
     ax5 = fig.add_subplot(245)
     ax6 = fig.add_subplot(246)
 
     if compare_same_abc:
-        ax3 = fig.add_subplot(243, projection='3d')
-        ax4 = fig.add_subplot(244, projection='3d')
+        ax3 = fig.add_subplot(243, **subplot_kw)
+        ax4 = fig.add_subplot(244, **subplot_kw)
         ax7 = fig.add_subplot(247)
         ax8 = fig.add_subplot(248)
         ax_ups = [ax1, ax2, ax3, ax4]
@@ -602,41 +685,51 @@ def init_factors_3d_fig(compare_same_abc=True):
         ax_ups = [ax1, ax2]
         ax_dns = [ax5, ax6]
 
-    for ax_up in ax_ups:
-        ax_up.view_init(elev=40., azim=155.)
+    if not plot_2d:
+        for ax_up in ax_ups:
+            ax_up.view_init(elev=40., azim=155.)
+    
+    if plot_2d:
+        fig.subplots_adjust(hspace=0.4)
+        if not shared_axes:
+            fig.subplots_adjust(wspace=0.5)
 
     return fig, ax_ups, ax_dns
 
 
 #############################################
-def plot_factors_3d(latents, unexp_grp, exp_grp, ax_up, ax_dn, 
-                    plot_single_trials=False, projections=False, folded=True, 
-                    seed=None):
+def plot_factors(latents, exp_idxs, unexp_idxs, ax_up, ax_dn, model=None,
+                 plot_single_trials=False, plot_2d=False, projections=False, 
+                 folded=True, seed=None):
     
     if plot_single_trials:
         projections = False
 
-    model = fit_PCA_Regression(
-        latents[np.logical_or(unexp_grp, exp_grp)], 
-        num_components=3,
-        seed=seed
-        )
+    n_comps = 2 if plot_2d else 3
+    if model is None:
+        model = fit_PCA_Regression(
+            latents[np.logical_or(exp_idxs, unexp_idxs)], 
+            num_components=n_comps,
+            seed=seed
+            )
 
     proj_factors = predict_PCA_Regression(latents, model)
+    if proj_factors.shape[-1] != n_comps:
+        raise ValueError(
+            f'Expected \'model\' to produce {n_comps} components, '
+            f'but found {proj_factors.shape[-1]}.'
+            )
 
     plot_trajectories(
-        ax_up, proj_factors, unexp_grp, exp_grp, 
-        plot_single_trials=plot_single_trials
+        ax_up, proj_factors, exp_idxs, unexp_idxs, 
+        plot_single_trials=plot_single_trials, projections=projections, 
+        folded=folded
         )
 
-    calc_plot_distance(ax_dn, proj_factors, unexp_grp, exp_grp, seed=seed)
-
-    if projections:
-        lims = add_stats_projections(
-            ax_up, proj_factors[exp_grp], proj_factors[unexp_grp], 
-            folded=folded
-            )
-        set_all_lims(ax_up, lims)
+    dist, boot_dist_std = calc_distance(
+        proj_factors, exp_idxs, unexp_idxs, seed=seed
+        )
+    plot_distance(ax_dn, dist, dist_err=boot_dist_std)
 
 
 #############################################
@@ -686,11 +779,14 @@ def fit_PCA_Regression(X, num_components=3, regr_scale=False, seed=None):
 
 
 #############################################
-def plot_trajectories(ax, proj_factors, unexp_grp, exp_grp, 
-                      plot_single_trials=False):
+def plot_trajectories(ax, proj_factors, exp_idxs, unexp_idxs, 
+                      plot_single_trials=False, projections=True, folded=True, 
+                      single_marks=True):
 
-    proj_unexp_mean = proj_factors[unexp_grp].mean(axis=0)
-    proj_exp_mean = proj_factors[exp_grp].mean(axis=0)
+    proj_exp_mean = proj_factors[exp_idxs].mean(axis=0)
+    proj_unexp_mean = proj_factors[unexp_idxs].mean(axis=0)
+
+    n_comps = proj_factors.shape[-1]
 
     lw = 1.5
     ms = 4
@@ -709,39 +805,68 @@ def plot_trajectories(ax, proj_factors, unexp_grp, exp_grp,
     
     if plot_single_trials:
         for grp, color_name in zip(
-            [exp_grp, unexp_grp], ['linc_blue', 'linc_red']
+            [exp_idxs, unexp_idxs], ['linc_blue', 'linc_red']
             ):
 
             keep_slice = slice(None)
-            if sum(grp) > sum(unexp_grp): # retain only every 10
+            if sum(grp) > sum(unexp_idxs): # retain only every 10
                 keep_slice = slice(None, None, 10)
 
             color = COLORS[color_name]
             for trial in proj_factors[grp][keep_slice]:
                 ftrial = savgol_filter(trial, 9, 2, axis=0)
                 ax.plot(*ftrial.T, color=color, lw=0.15)
-                ax.plot(*ftrial[0], color=color, marker='o', ms=1, lw=0)
-                ax.plot(*ftrial[-1], color=color, marker='^', ms=1, lw=0)
-                ax.plot(
-                    *ftrial[FRAMES_PER::FRAMES_PER].T, 's', color=color, ms=1, 
-                    lw=0
-                    )
+                if single_marks:
+                    ax.plot(*ftrial[0], color=color, marker='o', ms=1, lw=0)
+                    ax.plot(*ftrial[-1], color=color, marker='^', ms=1, lw=0)
+                    ax.plot(
+                        *ftrial[FRAMES_PER::FRAMES_PER].T, 's', color=color, 
+                        ms=1, lw=0
+                        )
+    
+    else: # plot errors
+        if n_comps == 2:
+            add_stats_2d(
+                ax, proj_factors[exp_idxs], proj_factors[unexp_idxs], 
+                folded=folded
+                )
 
-    # reset the axis ticks
-    for axis in ['x', 'y', 'z']:
-        ax.locator_params(nbins=5, axis=axis)
-    for axis in [ax.w_xaxis, ax.w_yaxis, ax.w_zaxis]:
-        axis.line.set_linewidth(1)
-        axis.set_ticklabels([])
-        axis._axinfo['grid'].update({'linewidth': 0.5})
-        axis._axinfo['tick'].update({'inward_factor': 0})
-        axis._axinfo['tick'].update({'outward_factor': 0})
+        elif n_comps == 3 and projections:
+            lims = add_stats_projections(
+                ax, proj_factors[exp_idxs], proj_factors[unexp_idxs], 
+                folded=folded
+                )
+            set_all_lims(ax, lims)
 
+    # format axes
+    if n_comps == 2:
+        lw = 2.5
+        ax.xaxis.set_tick_params(length=lw * 2, width=lw)
+        ax.yaxis.set_tick_params(length=lw * 2, width=lw)
+
+        for spine in ['right', 'top']:
+            ax.spines[spine].set_visible(False)
+        for spine in ['left', 'bottom']:
+            ax.spines[spine].set_linewidth(2)
+        
+    elif n_comps == 3:
+        for axis in ['x', 'y', 'z']:
+            ax.locator_params(nbins=5, axis=axis)
+        for axis in [ax.w_xaxis, ax.w_yaxis, ax.w_zaxis]:
+            axis.line.set_linewidth(1)
+            axis.set_ticklabels([])
+            axis._axinfo['grid'].update({'linewidth': 0.5})
+            axis._axinfo['tick'].update({'inward_factor': 0})
+            axis._axinfo['tick'].update({'outward_factor': 0})
+
+    else:
+        raise NotImplementedError('Expected 2 or 3 components.')
+            
 
 ##--------PLOT DISTANCES--------##
 #############################################
 def adjust_distance_axes(axs):
-    # share y axis for distances
+    # y axis is shared for distances
     min_ylim = np.min([ax.get_ylim()[0] for ax in axs])
     max_ylim = np.max([ax.get_ylim()[1] for ax in axs])
     for a, ax in enumerate(axs):
@@ -749,10 +874,12 @@ def adjust_distance_axes(axs):
 
     max_ytick = np.floor(max_ylim * 20) / 20
     yticks = [0, max_ytick]
-    for a, ax in enumerate(axs):
+
+    # reverse order to avoid erasing ytick labels
+    for a, ax in enumerate(axs[::-1]):
         ax.set_yticks(yticks)
         ax.spines['left'].set_bounds(yticks)
-        if a == 0:
+        if a == len(axs) - 1:
             ax.set_ylabel('Distance', fontsize='large')
             ax.set_yticklabels(
                 [f'{ytick:.2f}' for ytick in yticks], fontsize='large'
@@ -762,16 +889,9 @@ def adjust_distance_axes(axs):
 
 
 #############################################
-def calc_plot_distance(ax, proj_factors, unexp_grp, exp_grp, seed=None):
+def plot_distance(ax, dist, dist_err=None, color='darkslategrey', 
+                  add_marks=True, alpha=1.0, label_x_axis=True):
 
-    proj_unexp_mean = proj_factors[unexp_grp].mean(axis=0)
-    proj_exp_mean = proj_factors[exp_grp].mean(axis=0)
-
-    # calculate distance between mean traces in 3D with bootstrapped std
-    dist = np.sqrt(np.sum((proj_unexp_mean - proj_exp_mean)**2, axis=-1))
-    boot_dist_std = bootstrapped_diff_std(
-        proj_factors[exp_grp], proj_factors[unexp_grp], seed=seed
-        )
     x = np.arange(len(dist))
     length = FRAMES_PER * N_GAB_FR
     if len(x) != length:
@@ -781,38 +901,60 @@ def calc_plot_distance(ax, proj_factors, unexp_grp, exp_grp, seed=None):
             )
 
     # plot distance
-    color = 'darkslategrey'
     lw = 2.5
     ms = 5
-    ax.fill_between(
-        x, dist - boot_dist_std, dist + boot_dist_std, color=color, alpha=0.3, 
-        lw=0
-        )
 
-    ax.plot(dist, color=color, lw=lw)
-    ax.plot(x[0], dist[0], 'o', color=color, ms=ms)
-    ax.plot(x[-1], dist[-1], '^', color=color, ms=ms)
-    ax.plot(
-        x[FRAMES_PER::FRAMES_PER], dist[FRAMES_PER::FRAMES_PER], 's', 
-        color=color, ms=ms
-        )
-    
-    # amend the plot format a bit
-    for i in x[FRAMES_PER::FRAMES_PER]:
-        ax.axvline(
-            i, ls='dashed', lw=1, zorder=-13, alpha=0.6, color='k', ymin=0.1
+    # calculate and plot error first
+    if dist_err is not None:
+        ax.fill_between(
+            x, dist - dist_err, dist + dist_err, color=color, alpha=0.3, lw=0
             )
+
+    ax.plot(dist, color=color, lw=lw, alpha=alpha)
+    if add_marks:
+        ax.plot(x[0], dist[0], 'o', color=color, ms=ms, alpha=alpha)
+        ax.plot(x[-1], dist[-1], '^', color=color, ms=ms, alpha=alpha)
+        ax.plot(
+            x[FRAMES_PER::FRAMES_PER], dist[FRAMES_PER::FRAMES_PER], 's', 
+            color=color, ms=ms, alpha=alpha
+            )
+        
+        # amend the plot format a bit
+        for i in x[FRAMES_PER::FRAMES_PER]:
+            ax.axvline(
+                i, ls='dashed', lw=1, zorder=-13, alpha=0.6, color='k', 
+                ymin=0.1
+                )
+
     ax.set_xlim([x[0] - 5, x[-1] + 2]) # some padding
     ax.set_xticks([x[0], x[-1]])
-    ax.set_xticklabels([str(t) for t in TIME_EDGES], fontsize='large')
     ax.xaxis.set_tick_params(length=lw * 2, width=lw)
     ax.yaxis.set_tick_params(length=lw * 2, width=lw)
-    ax.set_xlabel('Time (s)', fontsize='large')
+
+    if label_x_axis:
+        ax.set_xticklabels([str(t) for t in TIME_EDGES], fontsize='large')
+        ax.set_xlabel('Time (s)', fontsize='large')
+
     for spine in ['right', 'top']:
         ax.spines[spine].set_visible(False)
     for spine in ['left', 'bottom']:
         ax.spines[spine].set_linewidth(2)
     ax.spines['bottom'].set_bounds([x[0], x[-1]])
+    
+
+#############################################
+def calc_distance(proj_factors, exp_idxs, unexp_idxs, seed=None):
+
+    proj_exp_mean = proj_factors[exp_idxs].mean(axis=0)
+    proj_unexp_mean = proj_factors[unexp_idxs].mean(axis=0)
+
+    dist = np.sqrt(np.sum((proj_unexp_mean - proj_exp_mean)**2, axis=-1))
+
+    boot_dist_std = bootstrapped_diff_std(
+        proj_factors[exp_idxs], proj_factors[unexp_idxs], seed=seed
+    )
+
+    return dist, boot_dist_std
     
 
 #############################################
@@ -856,7 +998,31 @@ def bootstrapped_diff_std(exp, unexp, n_samples=1000, seed=None):
 
 ##--------PLOT PROJECTIONS--------##
 #############################################
+def add_stats_2d(ax, exp, unexp, error='std', folded=True):
+    
+    exp_mean, exp_err = obtain_statistics(exp, error=error)
+    unexp_mean, unexp_err = obtain_statistics(unexp, error=error)
+    
+    length = FRAMES_PER * N_GAB_FR
+    for (mean, error, color_name) in zip(
+        [exp_mean, unexp_mean], [exp_err, unexp_err], ['linc_blue', 'linc_red']
+        ):
+
+        if len(mean) != length:
+            raise ValueError(
+                'Plotting designed for Gabor sequences of '
+                f'length {length}, but found {len(mean)}.'
+                )
+
+        create_polygon_fill_between(
+            ax, mean, error, color_name=color_name, alpha=0.2, folded=folded, 
+            zorder=-13
+            )
+
+
+#############################################
 def add_stats_projections(ax, exp, unexp, error='std', folded=True):
+    
     exp_mean, exp_err = obtain_statistics(exp, error=error)
     unexp_mean, unexp_err = obtain_statistics(unexp, error=error)
     
@@ -881,8 +1047,8 @@ def add_stats_projections(ax, exp, unexp, error='std', folded=True):
                     )
 
             create_polygon_fill_between(
-                ax, mean, error, offset, color_name=color_name, alpha=0.2, 
-                axis=axis, folded=folded
+                ax, mean, error, offset=offset, color_name=color_name, 
+                alpha=0.2, axis=axis, folded=folded
                 )
 
             kwargs = {
@@ -906,6 +1072,44 @@ def add_stats_projections(ax, exp, unexp, error='std', folded=True):
             
     return lims
 
+
+#############################################
+def adjust_trajectory_axes(axs, shared_axes=True):
+
+    for ax in axs:
+        ax.autoscale()
+
+    min_xlim = np.min([ax.get_xlim()[0] for ax in axs])
+    max_xlim = np.max([ax.get_xlim()[1] for ax in axs])
+
+    min_ylim = np.min([ax.get_ylim()[0] for ax in axs])
+    max_ylim = np.max([ax.get_ylim()[1] for ax in axs])
+
+    for a, ax in enumerate(axs[::-1]):
+        if not shared_axes:
+            min_xlim, max_xlim = ax.get_xlim()
+            min_ylim, max_ylim = ax.get_ylim()
+
+        # expand limits a bit
+        exp_min_xlim = min_xlim - (max_xlim - min_xlim) * 0.03
+        exp_max_xlim = max_xlim + (max_xlim - min_xlim) * 0.03
+
+        exp_min_ylim = min_ylim - (max_ylim - min_ylim) * 0.03
+        exp_max_ylim = max_ylim + (max_ylim - min_ylim) * 0.03
+
+        # make adjustments
+        ax.set_xlim(exp_min_xlim, exp_max_xlim)
+        ax.set_ylim(exp_min_ylim, exp_max_ylim)
+        adjust_axes(
+            ax, min_val=None, max_val=None, axis='both', lw=2.5, length=5, 
+            n_sig=1
+            )
+        ax.set_xticklabels(ax.get_xticks(), fontsize='large')
+        if shared_axes and a != (len(axs) - 1):
+            ax.set_yticklabels([])
+        else:
+            ax.set_yticklabels(ax.get_yticks(), fontsize='large')
+                
 
 #############################################
 def obtain_statistics(data, error='std'):
@@ -935,6 +1139,7 @@ def set_all_lims(ax, axis_lims):
 
 #############################################          
 def get_lims(ax, exp_mean, exp_err, unexp_mean, unexp_err, pad=0):
+    
     low_exp = (exp_mean - exp_err).min(axis=0) 
     high_exp = (exp_mean + exp_err).max(axis=0)
     pad_exp = (high_exp - low_exp) * pad
@@ -974,13 +1179,22 @@ def get_lims(ax, exp_mean, exp_err, unexp_mean, unexp_err, pad=0):
         
 
 #############################################
-def create_polygon_fill_between(ax, mean, error, offset, color_name, alpha=0.2, 
-                                axis='x', folded=True):
+def create_polygon_fill_between(ax, mean, error, offset=0, 
+                                color_name='linclab_blue', alpha=0.2, 
+                                axis='x', folded=True, zorder=None):
     
     from shapely import geometry
     from shapely.ops import unary_union
     
-    axes_keep = [v for v, val in enumerate(['x', 'y', 'z']) if val != axis]
+    n_dims = mean.shape[-1]
+    if n_dims not in [2, 3]:
+        raise NotImplementedError('Expected 2 or 3 dimensions.')
+
+    if n_dims == 3:
+        axes_keep = [v for v, val in enumerate(['x', 'y', 'z']) if val != axis]
+    else:
+        axes_keep = [0, 1]
+
     top = mean + error
     bottom = mean - error
     
@@ -1018,9 +1232,13 @@ def create_polygon_fill_between(ax, mean, error, offset, color_name, alpha=0.2,
         x, y = single_polygon.exterior.xy
 
         plg = PolyCollection(
-            [list(zip(x, y))], alpha=alpha, facecolor=COLORS[color_name]
+            [list(zip(x, y))], alpha=alpha, facecolor=COLORS[color_name],
+            zorder=zorder
             )
-        ax.add_collection3d(plg, zs=offset, zdir=axis)
+        if n_dims == 3:
+            ax.add_collection3d(plg, zs=offset, zdir=axis)    
+        else:
+            ax.add_collection(plg)
 
 
 #############################################
@@ -1037,7 +1255,13 @@ if __name__ == '__main__':
                         help='model_dir is used if output_dir is None')
     parser.add_argument('-n', '--num_runs', default=10, type=int, 
                         help='number of decoders to run per decoder type')
-    parser.add_argument('-p', '--projections', action='store_true')
+    parser.add_argument('-p', '--projections', action='store_true', 
+                        help='plot error as projections, if plotting 3d')
+
+    parser.add_argument('--shared_model', action='store_true', 
+                help="calculate PCA for full dataset.")
+    parser.add_argument('--plot_2d', action='store_true', 
+                help="calculate and plot PCA components in 2D instead of 3D.")
 
     parser.add_argument('--run_logreg', action='store_true')
     parser.add_argument('--run_svm', action='store_true')

@@ -16,38 +16,38 @@ SEED=$((200+SLURM_ARRAY_TASK_ID)) # increment seed for each array task
 
 
 # ORION HYPERPARAMS
-if [[ $SUB == 1 ]]; then
-    DEEP=128
-    dCTRL=64 # valpaca only
-    OBS=128 # valpaca only
-    CONT=128 # lfads only
-else
-    DEEP=64
-    dCTRL=32 # valpaca only
-    OBS=128 # valpaca only
-    CONT=$dCTRL # lfads only
-fi
 
 # check exported variables, and predict model directory name
 if [[ $LFADS == 1 ]]; then
+    SUB=1
+    
     MODEL=lfads
     DIREC=lfads_oasis
     DATA_SUFFIX=ospikes
 
     # params
-    cENC=$DEEP
+    cENC=128
     FACT=32
-    gENC=$DEEP
+    gENC=128
     GENE=200
     gLAT=64
     uLAT=1
 
-    MODEL_DESC=cenc$cENC'_cont'$CONT'_fact'$FACT'_genc'$gENC'_gene'$GENE'_glat'$gLAT'_ulat'$uLAT'_hp-seed'$SEED
-
+    MODEL_DESC='cenc'$cENC'_cont'$CONT'_fact'$FACT'_genc'$gENC'_gene'$GENE'_glat'$gLAT'_ulat'$uLAT'_hp-seed'$SEED
 else
     MODEL=valpaca
     DIREC=$MODEL
     DATA_SUFFIX=fluor
+
+    if [[ $SUB == 1 ]]; then
+        DEEP=128
+        dCTRL=64
+        OBS=128
+    else
+        DEEP=64
+        dCTRL=32
+        OBS=128
+    fi
 
     # params
     dCEN=$DEEP
@@ -61,7 +61,7 @@ else
     oENC=$OBS
     oLAT=128
 
-    MODEL_DESC=dcen$dCEN'_dcon'$dCTRL'_dgen'$dGEN'_dgla'$dGLA'_dula'$duLA'_fact'$FACT'_gene'$GEN'_ocon'$oCON'_oenc'$oENC'_olat'$oLAT'_hp-seed'$SEED
+    MODEL_DESC='dcen'$dCEN'_dcon'$dCTRL'_dgen'$dGEN'_dgla'$dGLA'_dula'$duLA'_fact'$FACT'_gene'$GEN'_ocon'$oCON'_oenc'$oENC'_olat'$oLAT'_hp-seed'$SEED
 fi
 
 if [[ $SUB == 1 ]]; then

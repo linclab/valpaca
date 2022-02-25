@@ -138,19 +138,19 @@ class RunManager():
                 else:
                     self.loss_dict['valid'][key] = [loss_dict[key]]
                     
-            # valid_loss = self.loss_dict['valid']['total'][-1]
             if not self.objective.any_zero_weights():
                 # recalculate total validation loss
-                valid_loss = 0
+                adj_valid_loss = 0
                 for key, val in self.loss_dict['valid'].items():
                     if 'recon' in key:
-                        valid_loss += val[-1]
+                        adj_valid_loss += val[-1]
                     if 'kl' in key:
-                        full_val = val[-1] / self.objective.loss_weights[key]['weight']
-                        valid_loss += full_val
+                        full_kl_val = val[-1] / self.objective.loss_weights[key]['weight']
+                        adj_valid_loss += full_kl_val
 
-                if valid_loss < self.best:
+                if adj_valid_loss < self.best:
                     self.save_checkpoint('best')
+                    self.best = adj_valid_loss
                 
             self.save_checkpoint()
             if self.writer is not None:
@@ -173,10 +173,14 @@ class RunManager():
             for key in self.loss_dict['train'].keys():
                 train_loss = self.loss_dict['train'][key][self.epoch-1]
                 valid_loss = self.loss_dict['valid'][key][self.epoch-1]
-                results_str = f'{results_str} {key} ({train_loss:.3f}, {valid_loss:.3f}),'
+                results_str = \
+                    f'{results_str} {key} ({train_loss:.3f}, {valid_loss:.3f}),'
             
             l2_loss = self.loss_dict['l2'][self.epoch - 1]
             results_str = f'{results_str} l2 ({l2_loss:.3f})'
+            if not self.objective.any_zero_weights():
+                results_str = (f'{results_str}, '
+                    f'adj. total valid loss ({adj_valid_loss:.4f})')
             
             logger.info(results_str)
             
