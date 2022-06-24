@@ -1,7 +1,7 @@
 # VaLPACa
 
 ## 1. Description
-This repository contains the code to run the VaLPACa algorithm (Variational Ladders for Parallel Autoencoding of Calcium imaging data), as published in [Prince _et al._, 2021, _biorXiv_](https://www.biorxiv.org/content/10.1101/2021.03.05.434105v1).   
+This repository contains code to run the VaLPACa algorithm (Variational Ladders for Parallel Autoencoding of Calcium imaging data), as published in [Prince _et al._, 2021, _biorXiv_](https://www.biorxiv.org/content/10.1101/2021.03.05.434105v1).   
 
 ## 2. Installation
 The code is written in `Python 3`.  

@@ -866,6 +866,7 @@ def plot_trajectories(ax, proj_factors, exp_idxs, unexp_idxs,
 ##--------PLOT DISTANCES--------##
 #############################################
 def adjust_distance_axes(axs):
+    
     # y axis is shared for distances
     min_ylim = np.min([ax.get_ylim()[0] for ax in axs])
     max_ylim = np.max([ax.get_ylim()[1] for ax in axs])
@@ -943,12 +944,14 @@ def plot_distance(ax, dist, dist_err=None, color='darkslategrey',
     
 
 #############################################
-def calc_distance(proj_factors, exp_idxs, unexp_idxs, seed=None):
+def calc_distance(proj_factors, exp_idxs, unexp_idxs, seed=None, norm=False):
 
     proj_exp_mean = proj_factors[exp_idxs].mean(axis=0)
     proj_unexp_mean = proj_factors[unexp_idxs].mean(axis=0)
 
     dist = np.sqrt(np.sum((proj_unexp_mean - proj_exp_mean)**2, axis=-1))
+    if norm:
+        dist = dist / np.sum(dist)
 
     boot_dist_std = bootstrapped_diff_std(
         proj_factors[exp_idxs], proj_factors[unexp_idxs], seed=seed
