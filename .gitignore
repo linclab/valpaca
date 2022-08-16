@@ -5,6 +5,8 @@ __pycache__
 /*/ 
 
 !/analysis/
-!/batch/
+!/data/
 !/hyperparameters/
+!/models/
+!/utils/
 
