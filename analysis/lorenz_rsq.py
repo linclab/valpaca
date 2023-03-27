@@ -16,7 +16,7 @@ from zmq import fd_sockopts
 matplotlib.use('agg')
 
 sys.path.append('..')
-from utils import utils
+from utils import util
 
 
 COLORS = {
@@ -87,7 +87,7 @@ logger = logging.getLogger(__name__)
 def main(args):
 
     # set logger to the specified level
-    utils.set_logger_level(logger, level=args.log_level)
+    util.set_logger_level(logger, level=args.log_level)
     
     seeds = SEEDS
 
@@ -109,9 +109,9 @@ def main(args):
         )
 
     # log t-test results
-    utils.set_logger_level(logger, level="info")
+    util.set_logger_level(logger, level="info")
     run_ttests(rsq, seeds=seeds, model_names=ANALYSIS_MODEL_NAMES)
-    utils.set_logger_level(logger, level=args.log_level)
+    util.set_logger_level(logger, level=args.log_level)
 
     # compile and save statistics
     savepath = f'{DATA_NAME}_{cond_str}_rsq.tex'
@@ -121,13 +121,13 @@ def main(args):
     Path(args.output_dir).mkdir(exist_ok=True, parents=True)
     for model in ANALYSIS_MODEL_NAMES:
         for calc_dyn in CALC_DYN_DICT.keys():
-            latent_dict = utils.load_latent(args.model_dir)
+            latent_dict = util.load_latent(args.model_dir)
 
             latent_path = get_model_filepath(
                 cond_str, ou_str, model_dir=args.model_dir, model=model, 
                 calc_dyn=calc_dyn, seed=PLOT_SEED, filetype='latents')
             
-            latent_dict = utils.load_latent(latent_path)
+            latent_dict = util.load_latent(latent_path)
 
             data_dict = get_data_dict(args.data_dir, calc_dyn=calc_dyn)
 
@@ -285,7 +285,7 @@ def get_data_dict(data_dir, calc_dyn='ar1'):
 
     calc_dyn_name = f'{DATA_NAME}_{calc_dyn_str}_{ou_str}_n'
 
-    data_dict = utils.read_data(data_dir, calc_dyn_name)
+    data_dict = util.read_data(data_dir, calc_dyn_name)
 
     return data_dict
 
@@ -454,6 +454,6 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    logger = utils.get_logger_with_basic_format(level=args.log_level)
+    logger = util.get_logger_with_basic_format(level=args.log_level)
     
     main(args)

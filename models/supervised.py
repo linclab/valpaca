@@ -1,3 +1,4 @@
+import copy
 import logging
 from pathlib import Path
 import time
@@ -39,18 +40,26 @@ def calc_pos_weight(labels):
 
 
 class Supervised_Net(nn.Module):
-    def __init__(self):
+    def __init__(self, classify=True):
         super(Supervised_Net, self).__init__()
+        self.classify = classify
     
     def _get_dataloader(self, x, y, batch_size=25):
         x = torch.Tensor(x).to(self.device)
-        y = y.reshape(-1, 1)
-        y = torch.Tensor(
-            OneHotEncoder(sparse=False).fit(y).transform(y)
-            ).to(self.device)
+        if self.classify:
+            y = y.reshape(-1, 1)
+            y = OneHotEncoder(sparse=False).fit(y).transform(y)
+        y = torch.Tensor(y).to(self.device)
         ds = torch.utils.data.TensorDataset(x, y)
         dl = torch.utils.data.DataLoader(ds, batch_size=batch_size)
         return dl
+    
+    def _get_criterion(self, pos_weight=None):
+        if self.classify:
+            criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        else:
+            criterion = nn.MSELoss()
+        return criterion
 
 
     def _run_epoch(self, train_dl, valid_dl, optimizer, criterion, it=0, 
@@ -112,6 +121,8 @@ class Supervised_Net(nn.Module):
         if isinstance(pos_weight, str) and pos_weight == 'auto':
             # infer from training data
             pos_weight = calc_pos_weight(y_train)
+        if pos_weight is not None:
+            pos_weight = torch.Tensor(pos_weight)
         
         save_loc = Path(save_loc, 'analysis')
         Path(save_loc).mkdir(exist_ok=True, parents=True)
@@ -125,8 +136,8 @@ class Supervised_Net(nn.Module):
                 x_valid, y_valid, batch_size=batch_size
                 )
 
-            criterion = nn.BCEWithLogitsLoss(
-                pos_weight=torch.Tensor(pos_weight)
+            criterion = self._get_criterion(
+                pos_weight=pos_weight
                 ).to(self.device)
             optimizer = torch.optim.Adam(self.parameters(), lr=learning_rate)
             
@@ -145,16 +156,11 @@ class Supervised_Net(nn.Module):
 
             if best_valid_loss < best_it_loss:
                 best_it_loss = best_valid_loss
-                best_it = it
+                best_state_dict = copy.deepcopy(self.state_dict())
                 
-        state_dict = torch.load(
-            Path(save_loc, f'best_{best_it}.pth'), 
-            map_location=torch.device(self.device)
-            )
-        self.load_state_dict(state_dict['net'])
-        
-        if save_loc is not None:
-            torch.save(state_dict, Path(save_loc, f'{model_name}.pth'))
+        self.load_state_dict(best_state_dict)
+        if save_loc is not None:        
+            torch.save(best_state_dict, Path(save_loc, f'{model_name}.pth'))
         
 
     def predict(self, x):
@@ -163,11 +169,14 @@ class Supervised_Net(nn.Module):
             x = torch.Tensor(x).to(self.device)
         with torch.no_grad():
             y_hat = self(x)
-        softmax = torch.nn.functional.softmax(
-            y_hat, dim=1
-            ).argmax(dim=1).cpu().numpy()
+        if self.classify:
+            pred_y = torch.nn.functional.softmax(
+                y_hat, dim=1
+                ).argmax(dim=1).cpu().numpy()
+        else:
+            pred_y = y_hat.cpu().numpy()
 
-        return softmax
+        return pred_y
     
 
 ##--------SUPERVISED CONV NET--------##
@@ -236,9 +245,9 @@ class Conv_Block(_ConvNd_Block):
 class Supervised_Conv1d_Net(Supervised_Net):
     def __init__(self, input_dims=(96, 45), channel_dims=(32, 8, 1),
                  conv_params=CONV_PARAMS, pool_params=POOL_PARAMS,
-                 dropout=0.5, dense_features=1, device='cpu'):
+                 dropout=0.5, dense_features=1, classify=True, device='cpu'):
     
-        super(Supervised_Conv1d_Net, self).__init__()
+        super(Supervised_Conv1d_Net, self).__init__(classify=classify)
         self.conv_blocks = nn.ModuleList()
         in_channels = input_dims[0]
         layer_dims = (input_dims[1],)
@@ -273,8 +282,9 @@ class Supervised_Conv1d_Net(Supervised_Net):
 
 class Supervised_BiRecurrent_Net(Supervised_Net):
     def __init__(self, input_size=100, hidden_size=16, dense_size=2, 
-                 num_layers=1, bias=True, dropout=0.05, device='cpu'):
-        super(Supervised_BiRecurrent_Net, self).__init__()
+                 num_layers=1, bias=True, dropout=0.05, classify=True, 
+                 device='cpu'):
+        super(Supervised_BiRecurrent_Net, self).__init__(classify=classify)
         self.dropout = nn.Dropout(dropout)
         self.rnn = nn.GRU(
             input_size=input_size, hidden_size=hidden_size, 

@@ -15,7 +15,7 @@ from mpl_toolkits.mplot3d import Axes3D
 import matplotlib
 matplotlib.use('agg')
 
-from utils import utils
+from utils import util
 from train_model import prep_model
 
 
@@ -25,11 +25,11 @@ logger = logging.getLogger(__name__)
 def main(args):
 
     # set logger to the specified level
-    utils.set_logger_level(logger, level=args.log_level)
+    util.set_logger_level(logger, level=args.log_level)
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
-    data_dict = utils.read_data(args.data_path)
+    data_dict = util.read_data(args.data_path)
 
     infer_latents_from_model(
         data_dict, model_dir=args.model_dir, output_dir=args.output_dir, 
@@ -43,7 +43,7 @@ def infer_latents_from_model(data_dict, model_dir, output_dir=None,
                              checkpoint='best', device='cpu'):
 
     model_name = get_model_name(model_dir)
-    hyperparams = utils.load_parameters(
+    hyperparams = util.load_parameters(
         Path(model_dir, 'hyperparameters.yaml')
         )
     
@@ -265,7 +265,7 @@ def get_latent_dict(data_dict, model, train_dl, valid_dl, model_name='valpaca',
 
 
 def infer_and_recon(sample, batch_size, model):
-    batch = utils.batchify_sample(sample, batch_size)
+    batch = util.batchify_sample(sample, batch_size)
     recon, (factors, inputs) = model(batch)
     result = dict()
     result['latent'] = factors.mean(dim=1).cpu().numpy()
@@ -393,7 +393,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    logger = utils.get_logger_with_basic_format(level=args.log_level)
+    logger = util.get_logger_with_basic_format(level=args.log_level)
 
     main(args)
 

@@ -4,4 +4,6 @@ matplotlib
 pyyaml
 h5py
 shapely
-git+git://github.com/j-friedrich/OASIS.git@master
+cython
+pynetwork
+git+https://github.com/j-friedrich/OASIS.git

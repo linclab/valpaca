@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 sys.path.extend(['.', '..'])
-from utils import utils
+from utils import util
 
 
 logger = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ class Plotter(object):
         
         data = dl.dataset.tensors[0]
         
-        batch_example, ix = utils.batchify_random_sample(
+        batch_example, ix = util.batchify_random_sample(
             data=data, batch_size=num_average, ix=ix
             )
         batch_example = batch_example.to(model.device)

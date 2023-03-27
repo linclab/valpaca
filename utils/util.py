@@ -134,7 +134,6 @@ def load_latent(model_dir):
 
     return latent_dict
 
-
 def seed_all(seed):
 
     if seed is not None:

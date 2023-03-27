@@ -6,7 +6,11 @@ __pycache__
 
 !/analysis/
 !/data/
+!/datasets/
 !/hyperparameters/
 !/models/
 !/utils/
 
+/datasets/*
+
+!/datasets/*.ipynb

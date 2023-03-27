@@ -3,14 +3,17 @@
 import argparse
 import copy
 import logging
+import multiprocessing
 from pathlib import Path
 import sys
 
+from joblib import delayed, Parallel
 import matplotlib
 import numpy as np
+import pandas as pd
 import torch
 import matplotlib.pyplot as plt
-from matplotlib.collections import PolyCollection
+from matplotlib.colors import LinearSegmentedColormap
 from mpl_toolkits.mplot3d import Axes3D # for 3D plotting
 from scipy.signal import savgol_filter
 matplotlib.use('agg')
@@ -20,17 +23,22 @@ from sklearn.model_selection import train_test_split, StratifiedShuffleSplit, \
 from sklearn.utils.fixes import loguniform
 import sklearn.metrics as metrics
 from sklearn.decomposition import PCA
-from sklearn.linear_model import RidgeCV, LogisticRegression
+from sklearn.linear_model import RidgeCV, Ridge
+from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.svm import SVC
 from sklearn.pipeline import make_pipeline
 
+import networkx as nx
+
 sys.path.extend(['.', '..'])
-from utils import utils
+from utils import util
 from models import supervised
 
 
 logger = logging.getLogger(__name__)
+
+# Data from https://dandiarchive.org/dandiset/000039/
+# See metadata: https://github.com/AllenInstitute/Contrast_Analysis/blob/master/targeted_manifest.csv
 
 
 ##--------HYPERPARAMETERS--------##
@@ -55,29 +63,27 @@ PLUS_MIN = u'\u00B1'
 TRAIN_P = 0.8
 
 MODEL_KWARGS = {
+    'classify': False, # only affects non-linear predictor
     'hidden_size': 16,
     'num_layers': 1,
     'bias': True,
     'dropout': 0.25,
-    'device': 'cpu'
+    'device': 'cpu',
     }
 
 FIT_KWARGS = {
     'batch_size': 68,
     'learning_rate': 5e-5,
-    'pos_weight': 'auto',
+    'pos_weight': None,
     'log_freq': 200,
     'max_epochs': 5000,
     'max_iter': 1,
     'save_loc': '.'
 }
 
-# Gabor sequence related parameters
-FRAMES_PER = 9
-N_GAB_FR = 5 # A, B, C, D/U, gr
-TIME_EDGES = [0, 1.5]
-THETAS = [0, 45, 90, 135]
-THETAS_MATCH_DU = [0, 45]
+# Trial related parameters
+TIME_EDGES = [0, 2]
+FEATURES = ['direction', 'contrast']
 
 
 ##--------MAIN--------##
@@ -85,56 +91,53 @@ THETAS_MATCH_DU = [0, 45]
 def main(args):
 
     # set logger to the specified level
-    utils.set_logger_level(logger, level=args.log_level)
+    util.set_logger_level(logger, level=args.log_level)
 
-    latent_dict = utils.load_latent(args.model_dir)
-    data_dict = update_keys(utils.read_data(args.data_path))
+    data_dict = util.read_data(args.data_path)
+    latent_dict = None
+    if not args.raw:
+        latent_dict = util.load_latent(args.model_dir)
 
     if args.output_dir is None:
         args.output_dir = args.model_dir
 
     # plot examples
-    savepath = Path(args.output_dir, 'allen_examples')
-    plot_examples(data_dict, latent_dict, trial_ix=15, savepath=savepath)
+    if latent_dict is not None:
+        savepath = Path(args.output_dir, 'allen_examples')
+        plot_examples(data_dict, latent_dict, trial_ix=15, savepath=savepath)
     
     # plot factor PCA
-    n_dim = 2 if args.plot_2d else 3
-    plot_save_factors_all(
-        data_dict, latent_dict, 
-        output_dir=Path(args.output_dir, f'factors_{n_dim}d_plots'), 
-        shared_model=args.shared_model,
-        plot_2d=args.plot_2d,
-        projections=args.projections, 
-        folded=True, 
-        seed=args.seed
-        )
+    for plot_2d in [True, False]:
+        plot_save_factors_all(
+            data_dict, latent_dict, 
+            output_dir=Path(args.output_dir, 'factor_plots'), 
+            plot_2d=plot_2d,
+            seed=args.seed
+            )
 
     # run decoders
     if args.num_runs == 0:
         return
 
     for scale in [True, False]:
-        scale_str = "scaling" if scale else "no scaling"
+        scale_str = 'scaling' if scale else 'no scaling'
 
-        logger.info(f'Decoders: {scale_str}', extra={'spacing': '\n'})
-        run_decoders(
-            data_dict, latent_dict, args.output_dir, run_logreg=args.run_logreg, 
-            run_svm=args.run_svm, run_nl_decoder=args.run_nl_decoder, 
-            num_runs=args.num_runs, seed=args.seed, scale=scale, 
-            log_scores=True
-            )
+        for feature in ['both']:
+            feat_str = ' and '.join(FEATURES) if feature == 'both' else feature
+            logger.info(
+                f'{feat_str.capitalize()} decoders: {scale_str}', 
+                extra={'spacing': '\n'}
+                )
+
+            run_decoders(
+                data_dict, latent_dict, args.output_dir, 
+                run_linreg=args.run_linreg, run_nl_decoder=args.run_nl_decoder, 
+                num_runs=args.num_runs, seed=args.seed, scale=scale, 
+                feature=feature, log_scores=True, parallel=args.parallel
+                )
 
 
 ##--------GENERAL FUNCTIONS--------##
-#############################################
-def update_keys(data_dict):
-    # update keys, if needed (surp -> unexp)
-    for prefix in ['train', 'valid']:
-        if f'{prefix}_surp' in data_dict.keys():
-            data_dict[f'{prefix}_unexp'] = data_dict.pop(f'{prefix}_surp')
-    return data_dict
-
-
 #############################################
 def load_trial_data(data_dict, latent_dict=None):
 
@@ -146,91 +149,66 @@ def load_trial_data(data_dict, latent_dict=None):
         data = data_unsorted[np.argsort(idxs)]
     else:
         data = latent_dict['ordered']['factors']
-    
+
     num_trials = len(data)
-    unexp = np.zeros(num_trials)
-    unexp[data_dict['train_idx']] = data_dict['train_unexp']
-    unexp[data_dict['valid_idx']] = data_dict['valid_unexp']
-    unexp = unexp.astype('bool')
+    direction = np.zeros(num_trials)
+    direction[data_dict['train_idx']] = data_dict['train_direction']
+    direction[data_dict['valid_idx']] = data_dict['valid_direction']
 
-    ori = np.zeros(num_trials)
-    ori[data_dict['train_idx']] = data_dict['train_ori']
-    ori[data_dict['valid_idx']] = data_dict['valid_ori']
-    ori = ori.astype('int')
-
-    return data, unexp, ori
-
-
-#############################################
-def get_thetas(compare_same_abc=True):
-
-    if compare_same_abc:
-        thetas = THETAS
-    else:
-        thetas = THETAS_MATCH_DU
-
-    return thetas
-
-
-#############################################
-def get_exp_theta(theta, compare_same_abc=True):
-
-    if compare_same_abc:
-        exp_theta = theta
-    else:
-        exp_theta = theta + 90
+    contrast = np.zeros(num_trials)
+    contrast[data_dict['train_idx']] = data_dict['train_contrast']
+    contrast[data_dict['valid_idx']] = data_dict['valid_contrast']
     
-    return exp_theta
+    return data, direction, contrast
 
-#############################################
-def get_data_idxs_from_theta(unexp, ori, theta=0, compare_same_abc=True):
-
-    exp_theta = get_exp_theta(theta, compare_same_abc)
-
-    exp_idxs = np.logical_and(~unexp, ori==exp_theta)
-    unexp_idxs = np.logical_and(unexp, ori==theta)
-    
-    return exp_idxs, unexp_idxs, exp_theta
 
 
 ##--------DECODER FUNCTIONS--------##
-#############################################
-def run_decoders(data_dict, latent_dict, output_dir, run_logreg=True, 
-                 run_svm=True, run_nl_decoder=False, num_runs=10, scale=True, 
-                 seed=None, log_scores=True):
 
-    X_train = latent_dict['train']['latent']
-    X_test = latent_dict['valid']['latent']
+#############################################
+def run_decoders(data_dict, latent_dict, output_dir, run_linreg=True, 
+                 run_nl_decoder=False, num_runs=10, scale=True, 
+                 feature='direction', seed=None, log_scores=True, 
+                 parallel=False):
+
+    scale_str = "_scaled" if scale else ""
+
+    if latent_dict is None:
+        X_train = data_dict['train_fluor']
+        X_test = data_dict['valid_fluor']
+    else:
+        X_train = latent_dict['train']['latent']
+        X_test = latent_dict['valid']['latent']
+    
     X = np.concatenate([X_train, X_test], axis=0)
 
-    y_train = data_dict['train_unexp'].astype('int')
-    y_test = data_dict['valid_unexp'].astype('int')
-    y = np.concatenate([y_train, y_test], axis=0)
+    y_train, y_test = [], []
+    features = FEATURES if feature == 'both' else [feature]
+    for feat in features:
+        if feat not in FEATURES:
+            raise ValueError(f'{feat} not recognized. Should be in {FEATURES}')
+        y_train.append(data_dict[f'train_{feat}'])
+        y_test.append(data_dict[f'valid_{feat}'])
+    y = np.concatenate([np.vstack(y_train), np.vstack(y_test)], axis=1).T
 
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
-    if run_logreg:
+    if run_linreg:
+        linreg_dir = Path(output_dir, 'linear_predictor')
         if log_scores:
-            logger.info('Logistic regression scores:', extra={'spacing': '\n'})
-        logreg_scores = perform_decoder_runs(
-            logreg_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, scale=scale
-            )
-        np.save(Path(output_dir, 'logreg_decoder_scores'), logreg_scores)
+            logger.info(
+                '  Linear regression R2 scores:', extra={'spacing': '\n'}
+                )
 
-    if run_svm:
-        if log_scores:
-            logger.info('RBF SVM scores:', extra={'spacing': '\n'})
-        logreg_scores = perform_decoder_runs(
-            rbf_svm_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, scale=scale
+        linreg_scores = perform_decoder_runs(
+            linreg_eval, X=X, y=y, feature=feature, num_runs=num_runs, 
+            seed=seed, log_scores=log_scores, scale=scale, 
+            output_dir=linreg_dir, parallel=parallel
             )
-        np.save(Path(output_dir, 'rbf_svm_scores'), logreg_scores)
+        np.save(Path(linreg_dir, f'{feature}{scale_str}_scores'), linreg_scores)
+
 
     if run_nl_decoder:
-        if log_scores:
-            logger.info('Non-linear decoder scores:', extra={'spacing': '\n'})
-
         decoder_kwargs = dict()
 
         model_kwargs = copy.deepcopy(MODEL_KWARGS)
@@ -238,7 +216,16 @@ def run_decoders(data_dict, latent_dict, output_dir, run_logreg=True,
         model_kwargs['device'] = device
 
         fit_kwargs = copy.deepcopy(FIT_KWARGS)
-        fit_kwargs['save_loc'] = output_dir
+
+        nl_dir = Path(output_dir, 'non_linear_predictor')
+        if log_scores:
+            if model_kwargs["classify"]:
+                score_str = 'decoding bal. acc.'
+            else:
+                score_str = 'regression R2'
+            logger.info(
+                f'  Non-linear {score_str} scores:', extra={'spacing': '\n'}
+                )
 
         decoder_kwargs = {
             'scale'       : scale,
@@ -247,41 +234,114 @@ def run_decoders(data_dict, latent_dict, output_dir, run_logreg=True,
         }
 
         nl_decoder_scores = perform_decoder_runs(
-            recurrent_net_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, **decoder_kwargs
+            recurrent_net_eval, X=X, y=y, feature=feature, num_runs=num_runs, 
+            seed=seed, log_scores=log_scores, output_dir=nl_dir, 
+            parallel=parallel, max_jobs=4, **decoder_kwargs,
             )
 
-        np.save(Path(output_dir, 'non_linear_decoder_scores'), nl_decoder_scores)
+        np.save(Path(nl_dir, f'{feature}{scale_str}_scores'), nl_decoder_scores)
 
 
 #############################################
-def perform_decoder_runs(decoder_fct, X, y, num_runs=10, seed=None, 
-                         log_scores=True, train_p=TRAIN_P, **decoder_kwargs):
+def perform_decoder_run(decoder_fct, X, y, train_p=0.8, seed=None, 
+                        feature='direction', classify=True, **decoder_kwargs):
 
-    utils.seed_all(seed)
+    # get a new split
+    train_data, test_data = train_test_split(
+        list(zip(X, y)), train_size=train_p, stratify=y, 
+        random_state=seed,
+        )
+
+    decoder_kwargs['X_train'] = np.asarray(list(zip(*train_data))[0])
+    decoder_kwargs['X_test'] = np.asarray(list(zip(*test_data))[0])
+    decoder_kwargs['y_train'] = format_y(
+        np.asarray(list(zip(*train_data))[1]), feature=feature, 
+        as_class=classify
+    )
+    decoder_kwargs['y_test'] = format_y(
+        np.asarray(list(zip(*test_data))[1]), feature=feature, 
+        as_class=classify
+    )
+
+    run_score, y_test, y_pred = decoder_fct(seed=seed, **decoder_kwargs)
+    return run_score, y_test, y_pred
+
+
+#############################################
+def perform_decoder_runs(decoder_fct, X, y, feature='direction', num_runs=10, 
+                         seed=None, log_scores=True, train_p=TRAIN_P, 
+                         output_dir=None, parallel=False, max_jobs=-1,
+                         **decoder_kwargs):
+
+    util.seed_all(seed)
 
     sub_seeds = [np.random.choice(int(2e5)) for _ in range(num_runs)]
 
-    scores = []
+    classify = False
+    if 'model_kwargs' in decoder_kwargs.keys():
+        classify = decoder_kwargs['model_kwargs']['classify']
+    
+    scale_str = "_scaled" if decoder_kwargs['scale'] else ""
+    feat_str = '' if feature == 'both' else f'{feature} '
+    title_str = f'{feat_str}decoding' if classify else f'{feat_str}regression'
+
+    plot_data = {'y_test': -np.inf, 'y_pred': -np.inf, 'idx': -1}
+
+    if parallel:
+        n_jobs = min(multiprocessing.cpu_count(), num_runs)
+        if n_jobs <= 1:
+            parallel = False
+        if max_jobs != -1:
+            n_jobs = min(n_jobs, max_jobs)
+
+    if parallel:
+        scores, y_tests, y_preds = zip(*Parallel(n_jobs=n_jobs)(
+            delayed(perform_decoder_run)(
+                decoder_fct, X, y, train_p=train_p, seed=sub_seed, 
+                feature=feature, classify=classify, **decoder_kwargs
+                ) for sub_seed in sub_seeds
+            ))
+    else:
+        scores = []
+
     for i, sub_seed in enumerate(sub_seeds):
+        if parallel:
+            run_score, y_test, y_pred = scores[i], y_tests[i], y_preds[i]
+        else:
+            run_score, y_test, y_pred = perform_decoder_run(
+                decoder_fct, X, y, train_p=train_p, seed=sub_seed, 
+                feature=feature, classify=classify, **decoder_kwargs
+                )
+            scores.append(run_score)
 
-        # get a new split
-        train_data, test_data = train_test_split(
-            list(zip(X, y)), train_size=train_p, stratify=y, 
-            random_state=sub_seed,
-            )
+        if run_score >= max(scores):
+            plot_data['y_test'] = y_test
+            plot_data['y_pred'] = y_pred
+            plot_data['idx'] = i
 
-        decoder_kwargs['X_train'] = np.asarray(list(zip(*train_data))[0])
-        decoder_kwargs['y_train'] = np.asarray(list(zip(*train_data))[1])
-        decoder_kwargs['X_test'] = np.asarray(list(zip(*test_data))[0])
-        decoder_kwargs['y_test'] = np.asarray(list(zip(*test_data))[1])
+            if classify:
+                score_str = f'bal. acc.={run_score * 100:.2f}%' 
+            else: 
+                score_str = f'R$^2$={run_score:.3f}'
+            suptitle = f'{title_str.capitalize()} ({score_str})'
 
-        run_score = decoder_fct(seed=sub_seed, **decoder_kwargs)
-        scores.append(run_score)
+            if not classify:
+                fig = plot_regression_results(
+                    y_test, y_pred, feature=feature, suptitle=suptitle, 
+                    )
+                if output_dir is not None:
+                    savepath = Path(
+                        output_dir, f'{feature}{scale_str}_regression'
+                        )
+                    Path(savepath).parent.mkdir(parents=True, exist_ok=True)
+                    fig.savefig(
+                        f'{savepath}.{SAVE_KWARGS["format"]}', **SAVE_KWARGS
+                        )
+
 
         if log_scores:
-            score_mean = np.mean(scores)
-            score_sem = np.std(scores) / np.sqrt(i + 1)
+            score_mean = np.mean(scores[:i+1])
+            score_sem = np.std(scores[:i+1]) / np.sqrt(i + 1)
 
             running_score_str = u'running score: {:.3f} {} {:.3f}'.format(
                 score_mean, PLUS_MIN, score_sem
@@ -294,7 +354,84 @@ def perform_decoder_runs(decoder_fct, X, y, num_runs=10, seed=None,
 
 
 #############################################
-def logreg_eval(X_train, y_train, X_test, y_test, scale=True, seed=None, 
+def plot_regression_results(y_test, y_pred, feature='direction', suptitle=None, 
+                            jitter=True):
+    
+    num_plots = 1
+    if feature == 'both':
+        num_plots = 2
+
+    fig, ax = plt.subplots(1, num_plots, figsize=[num_plots * 5, 4.5])
+    if feature != 'both':
+        ax = [ax]
+
+    if feature in ['direction', 'both']:
+        valid = ((y_pred[:, : 2] < 1) * (y_pred[:, : 2] > -1)).min(axis=1)
+        d_test, d_pred = [
+            (np.arctan2(y[:, 0], y[:, 1]) / np.pi * 180 + 360) % 360
+            for y in [y_test, y_pred]
+        ]
+        plot_test = jitter_data(d_test) if jitter else d_test
+        for mask, col in [(valid, 'blue'), (~valid, 'red')]:
+            ax[0].plot(
+                plot_test[mask], d_pred[mask], lw=0, marker='.', color=col, 
+                alpha=0.6
+                )
+
+        id = [d_test.min(), d_test.max()]
+        ax[0].plot(id, id, color='black', alpha=0.8, zorder=-5)
+
+        if feature == 'both':
+            ax[0].set_title('Direction (in deg.)')
+    
+    if feature in ['contrast', 'both']:
+        if feature == 'both':
+            c_test, c_pred = y_test[:, -1], y_pred[:, -1]
+        else:
+            c_test, c_pred = y_test, y_pred
+        plot_test = jitter_data(c_test) if jitter else c_test
+        ax[-1].plot(
+            plot_test, c_pred, lw=0, marker='.', color='blue', alpha=0.6
+            )
+        
+        id = [c_test.min(), c_test.max()]
+        ax[-1].plot(id, id, color='black', alpha=0.8, zorder=-5)
+
+        if feature == 'both':
+            ax[-1].set_title('Contrast')
+    
+    jit_str = ' (jittered)' if jitter else ''
+    ax[0].set_ylabel('Prediction')
+    for sub_ax in ax:
+        sub_ax.spines['right'].set_visible(False)
+        sub_ax.spines['top'].set_visible(False)
+        sub_ax.set_xlabel(f'Target{jit_str}')
+
+
+    if suptitle is not None:
+        y = 1.01 if feature == 'both' else 0.98
+        fig.suptitle(suptitle, y=y)
+    
+    return fig
+
+
+#############################################
+def jitter_data(data):
+
+    n = len(data)
+    width = np.diff(np.sort(np.unique(data))).min()
+
+    jitter = np.random.normal(0, 0.2, n)
+    jitter = np.minimum(np.maximum(jitter, -0.5), 0.5)
+    jitter *= width * 0.75
+
+    jittered = data + jitter
+
+    return jittered
+
+
+#############################################
+def linreg_eval(X_train, y_train, X_test, y_test, scale=True, seed=None, 
                 grid_search=False, log_params=True):
 
     # reshape data
@@ -302,17 +439,21 @@ def logreg_eval(X_train, y_train, X_test, y_test, scale=True, seed=None,
     X_test = X_test.reshape(len(X_test), -1)
 
     # initialize pipeline
-    model = LogisticRegression(
-        C=1, class_weight='balanced', random_state=seed, solver='lbfgs', 
-        penalty='l2', max_iter=1000, fit_intercept=True
-        )
+    model = Ridge(
+        alpha=1e2, random_state=seed, solver='auto', max_iter=1000, 
+        fit_intercept=True
+    )
+
+    if len(y_train.shape) != 1:
+        model = MultiOutputRegressor(model)
+
     scale_steps = [StandardScaler()] if scale else []
     pipeline = make_pipeline(*scale_steps, model)
 
     # select parameters with cross-validation grid search
     if grid_search:
         cv = StratifiedShuffleSplit(n_splits=5, test_size=0.2, random_state=seed)
-        param_dist = {'logisticregression__C': loguniform(1e-2, 1e2)}
+        param_dist = {'ridge__alpha': loguniform(1e-2, 1e2)}
         n_grid_iter = 20 * len(param_dist) # scaling partially by # of grid dims
         pipeline = RandomizedSearchCV(
             pipeline, param_distributions=param_dist, 
@@ -325,56 +466,14 @@ def logreg_eval(X_train, y_train, X_test, y_test, scale=True, seed=None,
         param_str = '\n    '.join(
             [f'{k}: {v}' for k, v in pipeline.best_params_.items()]
             )
-        logger.info(f'Best parameters (logreg):\n    {param_str}')
+        logger.info(f'Best parameters (linreg):\n    {param_str}')
 
     # predict on the held out test set
-    score = metrics.balanced_accuracy_score(y_test, pipeline.predict(X_test))
+    y_pred = pipeline.predict(X_test)
+    score = metrics.r2_score(y_test, y_pred)
 
-    return score
+    return score, y_test, y_pred
 
-
-#############################################
-def rbf_svm_eval(X_train, y_train, X_test, y_test, scale=True, seed=None, 
-                 grid_search=False, log_params=True):
-
-    # reshape data
-    X_train = X_train.reshape(len(X_train), -1)
-    X_test = X_test.reshape(len(X_test), -1)
-
-    # initialize pipeline
-    model = SVC(
-        C=1, gamma='scale', class_weight='balanced', kernel='rbf', 
-        random_state=seed
-        )
-    scale_steps = [StandardScaler()] if scale else []
-    pipeline = make_pipeline(*scale_steps, model)
-
-    # select parameters with cross-validation grid search
-    if grid_search:
-        cv = StratifiedShuffleSplit(
-            n_splits=5, test_size=0.2, random_state=seed
-            )
-        param_dist = {'svc__C': loguniform(1e-2, 1e10),
-                      'svc__gamma': loguniform(1e-9, 1e2)}
-        n_grid_iter = 20 * len(param_dist) # scaling partially by # of grid dims
-        pipeline = RandomizedSearchCV(
-            pipeline, param_distributions=param_dist, 
-            cv=cv, n_iter=n_grid_iter, random_state=seed, n_jobs=-1
-            )
-
-    pipeline.fit(X_train, y_train)
-
-    if grid_search and log_params:
-        param_str = '\n    '.join(
-            [f'{k}: {v}' for k, v in pipeline.best_params_.items()]
-            )
-        logger.info(f'Best parameters (rbf SVM):\n    {param_str}')
-
-    # predict on the held out test set
-    score = metrics.balanced_accuracy_score(y_test, pipeline.predict(X_test))
-
-    return score
-    
 
 #############################################
 def recurrent_net_eval(X_train, y_train, X_test, y_test, model_kwargs, 
@@ -390,9 +489,12 @@ def recurrent_net_eval(X_train, y_train, X_test, y_test, model_kwargs,
     X_valid, y_valid = [np.asarray(data) for data in zip(*valid_data)]
 
     input_size = X_train.shape[-1]
-    dense_size = max(y_train) + 1
+    if model_kwargs['classify']:
+        dense_size = max(y_train) + 1
+    else:
+        dense_size = 1 if len(y_train.shape) == 1 else y_train.shape[1]
 
-    utils.seed_all(seed)
+    util.seed_all(seed)
     model = supervised.Supervised_BiRecurrent_Net(
         input_size=input_size, dense_size=dense_size, **model_kwargs
         )
@@ -416,19 +518,54 @@ def recurrent_net_eval(X_train, y_train, X_test, y_test, model_kwargs,
     model.fit(X_train, y_train, X_valid, y_valid, **fit_kwargs)
     
     # predict on the held out test set
-    y_hat_test = model.predict(X_test)
-    score = metrics.balanced_accuracy_score(
-        y_test.squeeze(), y_hat_test.squeeze()
-        )
+    y_pred = model.predict(X_test)
+    if model_kwargs['classify']:
+        score = metrics.balanced_accuracy_score(
+            y_test.squeeze(), y_pred.squeeze()
+            )
+    else:
+        score = metrics.r2_score(y_test, y_pred)
 
-    return score
+    return score, y_test, y_pred
     
 
 #############################################
-def balanced_accuracy_score(targets, predictions):
-    C = metrics.confusion_matrix(targets, predictions)
-    return np.mean(C.diagonal() / C.sum(axis=1))
+def format_y(y, feature='direction', as_class=False):
 
+    if feature != 'both' and len(y.shape) == 2:
+        y = np.squeeze(y, axis=1)
+
+    if as_class:
+        y_class = np.empty(len(y)).astype(int)
+        if feature == 'both': # both features
+            y = np.asarray([
+                float(f'{y1}.{y2}') 
+                for y1, y2 in zip(
+                    format_y(y[:, 0], as_class=True), 
+                    format_y(y[:, 1], as_class=True)
+                    )
+                ])
+        for i, val in enumerate(np.unique(y)): 
+            y_class[y == val] = i
+        y = y_class
+
+    else:
+        if feature == 'contrast':
+            pass
+        elif feature == 'direction':
+            circ_y = np.empty((len(y), 2))
+            circ_y[:, 0] = np.sin(np.pi * y / 180)
+            circ_y[:, 1] = np.cos(np.pi * y / 180)
+            y = circ_y
+        elif feature == 'both':
+            ys = []
+            for f, feature in enumerate(FEATURES):
+                ys.append(format_y(y[:, f], feature=feature).reshape(len(y), -1))
+            y = np.concatenate(ys, axis=1)
+        else:
+            raise ValueError('feature should be \'direction\' or \'contrast\'.')
+
+    return y
 
 
 ##--------PLOT EXAMPLES--------##
@@ -568,147 +705,103 @@ def plot_examples(data_dict, latent_dict, trial_ix=0, num_traces=8,
 ##--------PLOT PCA FACTORS--------##
 #############################################
 def plot_save_factors_all(data_dict, latent_dict, output_dir='factors_3d_plots', 
-                          shared_model=False, plot_2d=False, projections=False, 
-                          folded=True, seed=None, close=True):
+                          plot_2d=False, seed=None, close=True):
 
-    latents, unexp, ori = load_trial_data(data_dict, latent_dict)
+    latents, direction, contrast = load_trial_data(data_dict, latent_dict)
 
     n_dim = 2 if plot_2d else 3
 
-    projections_str = '_withproj' if projections else ''
-    share_str = '_shared' if shared_model else ''
-    basename = f'factors_{n_dim}d_orisplit{share_str}'
-    for plot_single_trials in [False, True]:
-        suffix = '_withtrials' if plot_single_trials else projections_str
-        for compare_same_abc in [True, False]:
-            match = 'abc' if compare_same_abc else 'du'
-            savename = f'{basename}_match_{match}{suffix}'
+    savename = f'factors_{n_dim}d'
 
-            fact_fig = plot_factors_all_ori(
-                latents, unexp, ori, compare_same_abc=compare_same_abc, 
-                plot_single_trials=plot_single_trials, 
-                shared_model=shared_model, plot_2d=plot_2d,
-                projections=projections, folded=folded, seed=seed
-                )
-            
-            savepath = Path(output_dir, savename)
-            Path(output_dir).mkdir(parents=True, exist_ok=True)
-            fact_fig.savefig(
-                f'{savepath}.{SAVE_KWARGS["format"]}', **SAVE_KWARGS
-                )
+    fact_fig = plot_factors_all(
+        latents, direction, contrast, plot_2d=plot_2d, seed=seed
+        )
+    
+    savepath = Path(output_dir, savename)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    fact_fig.savefig(
+        f'{savepath}.{SAVE_KWARGS["format"]}', **SAVE_KWARGS
+        )
     
     if close:
-        plt.close("all")
+        plt.close('all')
 
 
 #############################################
-def plot_factors_all_ori(latents, unexp, ori, compare_same_abc=True, 
-                         plot_single_trials=False, shared_model=False, 
-                         plot_2d=False, projections=False, folded=True, 
-                         seed=None):
+def plot_factors_all(latents, direction, contrast, plot_2d=False, seed=None):
     
-    fig, ax_ups, ax_dns = init_factors_fig(
-        compare_same_abc=compare_same_abc, plot_2d=plot_2d, 
-        shared_axes=shared_model
-        )
+    fig, ax_mean, ax_single, ax_dist = init_factors_fig(plot_2d=plot_2d)
     
     # create model with full latents
     model = None
-    if shared_model:
-        n_comps = 2 if plot_2d else 3
-        model = fit_PCA_Regression(
-            latents, 
-            num_components=n_comps,
-            seed=seed
-            )
+    n_comps = 2 if plot_2d else 3
+    model = fit_PCA_Regression(
+        latents, 
+        num_components=n_comps,
+        seed=seed
+        )
 
-    thetas = get_thetas(compare_same_abc)
-    for theta, ax_up, ax_dn in zip(thetas, ax_ups, ax_dns):
-    
-        exp_idxs, unexp_idxs, exp_theta = get_data_idxs_from_theta(
-            unexp, ori, theta, compare_same_abc=compare_same_abc
-            )
+    feature_data = {
+        'direction': direction,
+        'contrast': contrast,
+    }
+    for feature, ax_m, ax_s, ax_d in zip(FEATURES, ax_mean, ax_single, ax_dist):
 
-        plot_factors(
+        title = feature.capitalize()
+        ax_m.set_title(title, fontsize='x-large')
+
+        proj_factors = plot_factors(
             latents,
-            exp_idxs,
-            unexp_idxs,
-            ax_up, 
-            ax_dn, 
+            feature_data[feature],
+            ax_m, 
+            ax_s, 
             model=model,
-            plot_single_trials=plot_single_trials, 
             plot_2d=plot_2d,
-            projections=projections, 
-            folded=folded, 
+            # circ_col=(feature == 'direction'),
             seed=seed
             )
-        
-        if compare_same_abc:
-            title = u'ABC: {}{}'.format(theta, DEG)
-        else:
-            title = u'D/U: {}{}'.format(exp_theta, DEG)
 
-        ax_up.set_title(title, fontsize='x-large')
+        dist_df = get_distance_df(proj_factors, direction, contrast)
+        plot_distance_graph(dist_df, feature=feature, ax=ax_d, seed=seed)
 
     if plot_2d:
-        adjust_trajectory_axes(ax_ups, shared_axes=shared_model)
-
-    adjust_distance_axes(ax_dns)
+        adjust_trajectory_axes(ax_mean, shared_axes=True)
+        adjust_trajectory_axes(ax_single, shared_axes=True)
 
     return fig
 
 
 #############################################
-def init_factors_fig(compare_same_abc=True, plot_2d=False, shared_axes=False):
-    
-    if plot_2d:
-        subplot_kw = dict()
-    else:
-        subplot_kw = {'projection': '3d'}
+def init_factors_fig(plot_2d=False):
 
+    fig, ax = plt.subplots(3, 2, figsize=(10, 14))
 
-    figsize = [8.75, 4.2]
-    fig = plt.figure(figsize=figsize)
-    ax1 = fig.add_subplot(241, **subplot_kw)
-    ax2 = fig.add_subplot(242, **subplot_kw)
-    ax5 = fig.add_subplot(245)
-    ax6 = fig.add_subplot(246)
-
-    if compare_same_abc:
-        ax3 = fig.add_subplot(243, **subplot_kw)
-        ax4 = fig.add_subplot(244, **subplot_kw)
-        ax7 = fig.add_subplot(247)
-        ax8 = fig.add_subplot(248)
-        ax_ups = [ax1, ax2, ax3, ax4]
-        ax_dns = [ax5, ax6, ax7, ax8]
-    else:
-        ax_ups = [ax1, ax2]
-        ax_dns = [ax5, ax6]
+    ax_mean, ax_single, ax_dist = ax
 
     if not plot_2d:
-        for ax_up in ax_ups:
-            ax_up.view_init(elev=40., azim=155.)
-    
-    if plot_2d:
-        fig.subplots_adjust(hspace=0.4)
-        if not shared_axes:
-            fig.subplots_adjust(wspace=0.5)
+        for i in range(2):
+            ax_mean[i].remove()
+            ax_mean[i] = fig.add_subplot(3, 2, i + 1, projection='3d')
 
-    return fig, ax_ups, ax_dns
+            ax_single[i].remove()
+            ax_single[i] = fig.add_subplot(3, 2, i + 3, projection='3d')
+
+        for sub_ax in np.concatenate([ax_mean, ax_single]):
+            sub_ax.view_init(elev=40., azim=50.)
+        
+    
+    return fig, ax_mean, ax_single, ax_dist
 
 
 #############################################
-def plot_factors(latents, exp_idxs, unexp_idxs, ax_up, ax_dn, model=None,
-                 plot_single_trials=False, plot_2d=False, projections=False, 
-                 folded=True, seed=None):
+def plot_factors(latents, feature, ax_mean, ax_single, model=None, 
+                 plot_2d=False, circ_col=False, seed=None):
     
-    if plot_single_trials:
-        projections = False
 
     n_comps = 2 if plot_2d else 3
     if model is None:
         model = fit_PCA_Regression(
-            latents[np.logical_or(exp_idxs, unexp_idxs)], 
+            latents, 
             num_components=n_comps,
             seed=seed
             )
@@ -721,15 +814,10 @@ def plot_factors(latents, exp_idxs, unexp_idxs, ax_up, ax_dn, model=None,
             )
 
     plot_trajectories(
-        ax_up, proj_factors, exp_idxs, unexp_idxs, 
-        plot_single_trials=plot_single_trials, projections=projections, 
-        folded=folded
+        ax_mean, ax_single, proj_factors, feature, circ_col=circ_col
         )
 
-    dist, boot_dist_std = calc_distance(
-        proj_factors, exp_idxs, unexp_idxs, seed=seed
-        )
-    plot_distance(ax_dn, dist, dist_err=boot_dist_std)
+    return proj_factors
 
 
 #############################################
@@ -779,197 +867,214 @@ def fit_PCA_Regression(X, num_components=3, regr_scale=False, seed=None):
 
 
 #############################################
-def plot_trajectories(ax, proj_factors, exp_idxs, unexp_idxs, 
-                      plot_single_trials=False, projections=True, folded=True, 
-                      single_marks=True):
+def plot_trajectories(ax_mean, ax_single, proj_factors, feature, 
+                      single_marks=False, circ_col=False):
 
-    proj_exp_mean = proj_factors[exp_idxs].mean(axis=0)
-    proj_unexp_mean = proj_factors[unexp_idxs].mean(axis=0)
+    feature_vals = np.sort(np.unique(feature))
+    num_features = len(feature_vals)
+
+    all_idxs, all_means = [], []
+    for val in feature_vals:
+        all_idxs.append(feature == val)
+        all_means.append(proj_factors[all_idxs[-1]].mean(axis=0))
+
+    if circ_col:
+        colors = get_colors(None, None, n=num_features, circ_col=True)
+    else:
+        colors = get_colors(
+            COLORS['linc_blue'], COLORS['linc_red'], n=num_features
+            )
 
     n_comps = proj_factors.shape[-1]
 
     lw = 1.5
     ms = 4
-    for mean, color_name in zip(
-        [proj_exp_mean, proj_unexp_mean], ['linc_blue', 'linc_red']
-        ):
-        color = COLORS[color_name]
+    for mean, idxs, color in zip(all_means, all_idxs, colors):
+        ax_mean.plot(*mean.T, color=color, lw=lw)
+        ax_mean.plot(*mean[0], color=color, marker='o', lw=0, ms=ms)
+        ax_mean.plot(*mean[-1], color=color, marker='^', lw=0, ms=ms)
 
-        ax.plot(*mean.T, color=color, lw=lw)
-        ax.plot(*mean[0], color=color, marker='o', lw=0, ms=ms)
-        ax.plot(*mean[-1], color=color, marker='^', lw=0, ms=ms)
-        ax.plot(
-            *mean[FRAMES_PER::FRAMES_PER].T, color=color, marker='s', lw=0, 
-            ms=ms
-            )
+        step = max(1, int(sum(idxs) / 20))
+        sample_slice = slice(0, sum(idxs), step)
+        for trial in proj_factors[idxs][sample_slice]:
+            
+            ftrial = savgol_filter(trial, 9, 2, axis=0)
+            ax_single.plot(*ftrial.T, color=color, lw=0.15, alpha=0.8)
+            if single_marks:
+                ax_single.plot(
+                    *ftrial[0], color=color, marker='o', ms=1, lw=0, alpha=0.8
+                    )
+                ax_single.plot(
+                    *ftrial[-1], color=color, marker='^', ms=1, lw=0, alpha=0.8
+                    )
     
-    if plot_single_trials:
-        for grp, color_name in zip(
-            [exp_idxs, unexp_idxs], ['linc_blue', 'linc_red']
-            ):
-
-            keep_slice = slice(None)
-            if sum(grp) > sum(unexp_idxs): # retain only every 10
-                keep_slice = slice(None, None, 10)
-
-            color = COLORS[color_name]
-            for trial in proj_factors[grp][keep_slice]:
-                ftrial = savgol_filter(trial, 9, 2, axis=0)
-                ax.plot(*ftrial.T, color=color, lw=0.15)
-                if single_marks:
-                    ax.plot(*ftrial[0], color=color, marker='o', ms=1, lw=0)
-                    ax.plot(*ftrial[-1], color=color, marker='^', ms=1, lw=0)
-                    ax.plot(
-                        *ftrial[FRAMES_PER::FRAMES_PER].T, 's', color=color, 
-                        ms=1, lw=0
-                        )
-    
-    else: # plot errors
-        if n_comps == 2:
-            add_stats_2d(
-                ax, proj_factors[exp_idxs], proj_factors[unexp_idxs], 
-                folded=folded
-                )
-
-        elif n_comps == 3 and projections:
-            lims = add_stats_projections(
-                ax, proj_factors[exp_idxs], proj_factors[unexp_idxs], 
-                folded=folded
-                )
-            set_all_lims(ax, lims)
 
     # format axes
-    if n_comps == 2:
-        lw = 2.5
-        ax.xaxis.set_tick_params(length=lw * 2, width=lw)
-        ax.yaxis.set_tick_params(length=lw * 2, width=lw)
+    for ax in [ax_mean, ax_single]:
+        if n_comps == 2:
+            lw = 2.5
+            ax.xaxis.set_tick_params(length=lw * 2, width=lw)
+            ax.yaxis.set_tick_params(length=lw * 2, width=lw)
 
-        for spine in ['right', 'top']:
-            ax.spines[spine].set_visible(False)
-        for spine in ['left', 'bottom']:
-            ax.spines[spine].set_linewidth(2)
-        
-    elif n_comps == 3:
-        for axis in ['x', 'y', 'z']:
-            ax.locator_params(nbins=5, axis=axis)
-        for axis in [ax.w_xaxis, ax.w_yaxis, ax.w_zaxis]:
-            axis.line.set_linewidth(1)
-            axis.set_ticklabels([])
-            axis._axinfo['grid'].update({'linewidth': 0.5})
-            axis._axinfo['tick'].update({'inward_factor': 0})
-            axis._axinfo['tick'].update({'outward_factor': 0})
-
-    else:
-        raise NotImplementedError('Expected 2 or 3 components.')
+            for spine in ['right', 'top']:
+                ax.spines[spine].set_visible(False)
+            for spine in ['left', 'bottom']:
+                ax.spines[spine].set_linewidth(2)
             
+        elif n_comps == 3:
+            for axis in ['x', 'y', 'z']:
+                ax.locator_params(nbins=5, axis=axis)
+            for axis in [ax.w_xaxis, ax.w_yaxis, ax.w_zaxis]:
+                axis.line.set_linewidth(1)
+                axis.set_ticklabels([])
+                axis._axinfo['grid'].update({'linewidth': 0.5})
+                axis._axinfo['tick'].update({'inward_factor': 0})
+                axis._axinfo['tick'].update({'outward_factor': 0})
+
+        else:
+            raise NotImplementedError('Expected 2 or 3 components.')
+
 
 ##--------PLOT DISTANCES--------##
 #############################################
-def adjust_distance_axes(axs):
+def get_distance_df(proj_factors, direction, contrast):
+
+    columns=[
+        'feature', 'indices', 'values', 'dist_mean', 'dist_std', 
+        'end_dist_mean', 'end_dist_std'
+        ]
+
+    all_dfs = []
+    for feature, feat_str in [(direction, 'direction'), (contrast, 'contrast')]:   
+        dist_df = pd.DataFrame(columns=columns)
+        unique_vals = np.sort(np.unique(feature))
+        val_idx = [np.where(feature == f)[0] for f in unique_vals]
+
+        pw_idx  = [
+            (i, j) for i in range(len(unique_vals)) 
+            for j in range(len(unique_vals))[i + 1:]
+            ]
+
+        dists = np.asarray([
+            calc_distance(proj_factors, val_idx[i], val_idx[j], norm=False)[0]
+            for i, j in pw_idx
+        ])
+        num_end = dists.shape[1] // 4
+
+        dist_df['dist_mean'] = dists.mean(axis=1).tolist()
+        dist_df['dist_std'] = dists.std(axis=1).tolist()
+        dist_df['end_dist_mean'] = dists[:, -num_end:].mean(axis=1).tolist()
+        dist_df['end_dist_std'] = dists[:, -num_end:].std(axis=1).tolist()
+
+        dist_df['indices'] = pw_idx
+        dist_df['values'] = [
+            (unique_vals[i], unique_vals[j]) for i, j in pw_idx
+        ]
+        dist_df['feature'] = feat_str
+        all_dfs.append(dist_df)
     
-    # y axis is shared for distances
-    min_ylim = np.min([ax.get_ylim()[0] for ax in axs])
-    max_ylim = np.max([ax.get_ylim()[1] for ax in axs])
-    for a, ax in enumerate(axs):
-        ax.set_ylim([min_ylim, max_ylim])
+    dist_df = pd.concat(all_dfs)
 
-    max_ytick = np.floor(max_ylim * 20) / 20
-    yticks = [0, max_ytick]
-
-    # reverse order to avoid erasing ytick labels
-    for a, ax in enumerate(axs[::-1]):
-        ax.set_yticks(yticks)
-        ax.spines['left'].set_bounds(yticks)
-        if a == len(axs) - 1:
-            ax.set_ylabel('Distance', fontsize='large')
-            ax.set_yticklabels(
-                [f'{ytick:.2f}' for ytick in yticks], fontsize='large'
-                )
-        else:
-            ax.set_yticklabels(['', '']) 
+    return dist_df
 
 
 #############################################
-def plot_distance(ax, dist, dist_err=None, color='darkslategrey', 
-                  add_marks=True, alpha=1.0, label_x_axis=True):
+def plot_distance_graph(df, feature='direction', ax=None, neigh=True, 
+                        end=False, seed=None):
 
-    x = np.arange(len(dist))
-    length = FRAMES_PER * N_GAB_FR
-    if len(x) != length:
-        raise ValueError(
-            f'Plotting designed for Gabor sequences of length {length}, but '
-            f'found {len(x)}.'
-            )
+    g = nx.Graph()
+    sub_df = df.loc[df['feature'] == feature]
+    
+    dist_key = 'end_dist_mean' if end else 'dist_mean'
 
-    # plot distance
-    lw = 2.5
-    ms = 5
+    node_idxs, node_values = [], []
+    seps, weights = [], []
+    for idx in sub_df.index:
+        i, j = sub_df.loc[idx, 'indices']
+        val1, val2 = sub_df.loc[idx, 'values']
+        weight = 1 / sub_df.loc[idx, dist_key]
+        g.add_edge(i, j, color='k', weight=weight, label=f'{val1}, {val2}')
+        seps.append(np.absolute(j - i))
+        weights.append(weight)
 
-    # calculate and plot error first
-    if dist_err is not None:
-        ax.fill_between(
-            x, dist - dist_err, dist + dist_err, color=color, alpha=0.3, lw=0
-            )
+        if i not in node_idxs:
+            node_idxs.append(i)
+            node_values.append(val1)
+        if j not in node_idxs:
+            node_idxs.append(j)
+            node_values.append(val2)
 
-    ax.plot(dist, color=color, lw=lw, alpha=alpha)
-    if add_marks:
-        ax.plot(x[0], dist[0], 'o', color=color, ms=ms, alpha=alpha)
-        ax.plot(x[-1], dist[-1], '^', color=color, ms=ms, alpha=alpha)
-        ax.plot(
-            x[FRAMES_PER::FRAMES_PER], dist[FRAMES_PER::FRAMES_PER], 's', 
-            color=color, ms=ms, alpha=alpha
-            )
-        
-        # amend the plot format a bit
-        for i in x[FRAMES_PER::FRAMES_PER]:
-            ax.axvline(
-                i, ls='dashed', lw=1, zorder=-13, alpha=0.6, color='k', 
-                ymin=0.1
-                )
+    if feature == 'direction':
+        seps = [min([sep, len(node_idxs) - sep]) for sep in seps] # circular
 
-    ax.set_xlim([x[0] - 5, x[-1] + 2]) # some padding
-    ax.set_xticks([x[0], x[-1]])
-    ax.xaxis.set_tick_params(length=lw * 2, width=lw)
-    ax.yaxis.set_tick_params(length=lw * 2, width=lw)
+    if neigh:
+        weights = np.asarray(weights) 
+        weights_norm = (weights - weights.min()) / (weights.max() - weights.min()) + 0.5
+        widths = np.asarray(
+            [weights_norm[s] if sep == 1 else 0 for s, sep in enumerate(seps)]
+        ) * 3
+        alpha = 1
+    else: # 0.25 to 0.75
+        seps = (len(node_idxs) - np.asarray(seps))
+        seps = (seps - seps.min()) / (seps.max() - seps.min()) * 0.5 + 0.25 
+        widths = seps * 3
+        alpha = seps
 
-    if label_x_axis:
-        ax.set_xticklabels([str(t) for t in TIME_EDGES], fontsize='large')
-        ax.set_xlabel('Time (s)', fontsize='large')
+    node_colors = get_colors(
+        COLORS['linc_blue'], COLORS['linc_red'], len(node_idxs)
+    )
+    node_labels = {i: label for i, label in zip(node_idxs, node_values)}
+    
+    pos = nx.spring_layout(g, dim=2, weight='weight', seed=seed)
 
-    for spine in ['right', 'top']:
-        ax.spines[spine].set_visible(False)
-    for spine in ['left', 'bottom']:
-        ax.spines[spine].set_linewidth(2)
-    ax.spines['bottom'].set_bounds([x[0], x[-1]])
+    if ax is None:
+        fig, ax = plt.subplots(figsize=[6, 6])
+    else:
+        fig = ax.figure
+
+    fs, ns = 9, 1200
+    nx.draw(
+        g, pos, ax=ax, edge_color='k', width=widths, node_size=ns, 
+        alpha=alpha
+        )
+    nx.draw_networkx_nodes(
+        g, pos, ax=ax, node_color=node_colors, linewidths=2, edgecolors='k', 
+        node_size=ns
+        )
+    nx.draw_networkx_labels(
+        g, pos, ax=ax, labels=node_labels, font_size=fs, font_weight='bold'
+        )
+    
+    return fig, ax
     
 
 #############################################
-def calc_distance(proj_factors, exp_idxs, unexp_idxs, seed=None, norm=False):
+def calc_distance(proj_factors, idx_1, idx_2, seed=None, norm=False):
 
-    proj_exp_mean = proj_factors[exp_idxs].mean(axis=0)
-    proj_unexp_mean = proj_factors[unexp_idxs].mean(axis=0)
+    proj_1_mean = proj_factors[idx_1].mean(axis=0)
+    proj_2_mean = proj_factors[idx_2].mean(axis=0)
 
-    dist = np.sqrt(np.sum((proj_unexp_mean - proj_exp_mean)**2, axis=-1))
+    dist = np.sqrt(np.sum((proj_2_mean - proj_1_mean)**2, axis=-1))
     if norm:
         dist = dist / np.sum(dist)
 
     boot_dist_std = bootstrapped_diff_std(
-        proj_factors[exp_idxs], proj_factors[unexp_idxs], seed=seed
+        proj_factors[idx_1], proj_factors[idx_2], seed=seed
     )
 
     return dist, boot_dist_std
     
 
 #############################################
-def bootstrapped_diff_std(exp, unexp, n_samples=1000, seed=None):
+def bootstrapped_diff_std(vals1, vals2, n_samples=1000, seed=None):
     """
     bootstrapped_std(data)
     
     Returns bootstrapped standard deviation of the mean.
 
     Required args:
-        - exp (3D array): regular data
-        - unexp (3D array): unexprise data
+        - vals1 (3D array): first set of data
+        - vals2 (3D array): second set of data
     
     Optional args:
         - n_samples (int): number of samplings to take for bootstrapping
@@ -982,99 +1087,23 @@ def bootstrapped_diff_std(exp, unexp, n_samples=1000, seed=None):
     rng = np.random.RandomState(seed)
 
     # random values
-    n_exp = len(exp)
-    n_unexp = len(unexp)
+    n_vals1 = len(vals1)
+    n_vals2 = len(vals2)
     choices_exp = rng.choice(
-        np.arange(n_exp), (n_exp, n_samples), replace=True).reshape(n_exp, -1)
+        np.arange(n_vals1), (n_vals1, n_samples), replace=True
+        ).reshape(n_vals1, -1)
     choices_unexp = rng.choice(
-        np.arange(n_unexp), (n_unexp, n_samples), replace=True
-        ).reshape(n_unexp, -1)
+        np.arange(n_vals2), (n_vals2, n_samples), replace=True
+        ).reshape(n_vals2, -1)
     
-    exp_resampled = np.mean(exp[choices_exp], axis=0)
-    unexp_resampled = np.mean(unexp[choices_unexp], axis=0)
+    vals1_resampled = np.mean(vals1[choices_exp], axis=0)
+    vals2_resampled = np.mean(vals2[choices_unexp], axis=0)
 
     boot_dist_std = np.std(
-        np.sqrt(np.sum((unexp_resampled - exp_resampled)**2, axis=-1)), axis=0)
+        np.sqrt(np.sum((vals1_resampled - vals2_resampled)**2, axis=-1)), axis=0)
     
     return boot_dist_std
-
-
-##--------PLOT PROJECTIONS--------##
-#############################################
-def add_stats_2d(ax, exp, unexp, error='std', folded=True):
     
-    exp_mean, exp_err = obtain_statistics(exp, error=error)
-    unexp_mean, unexp_err = obtain_statistics(unexp, error=error)
-    
-    length = FRAMES_PER * N_GAB_FR
-    for (mean, error, color_name) in zip(
-        [exp_mean, unexp_mean], [exp_err, unexp_err], ['linc_blue', 'linc_red']
-        ):
-
-        if len(mean) != length:
-            raise ValueError(
-                'Plotting designed for Gabor sequences of '
-                f'length {length}, but found {len(mean)}.'
-                )
-
-        create_polygon_fill_between(
-            ax, mean, error, color_name=color_name, alpha=0.2, folded=folded, 
-            zorder=-13
-            )
-
-
-#############################################
-def add_stats_projections(ax, exp, unexp, error='std', folded=True):
-    
-    exp_mean, exp_err = obtain_statistics(exp, error=error)
-    unexp_mean, unexp_err = obtain_statistics(unexp, error=error)
-    
-    projections, lims = get_lims(
-        ax, exp_mean, exp_err, unexp_mean, unexp_err, pad=0.05
-        )
-    
-    alpha = 0.4
-    ms = 3.5
-    length = FRAMES_PER * N_GAB_FR
-    for a, (axis, offset) in enumerate(zip(['x', 'y', 'z'], projections)):
-        for (mean, error, color_name) in zip(
-            [exp_mean, unexp_mean], 
-            [exp_err, unexp_err], 
-            ['linc_blue', 'linc_red']
-            ):
-
-            if len(mean) != length:
-                raise ValueError(
-                    'Plotting designed for Gabor sequences of '
-                    f'length {length}, but found {len(mean)}.'
-                    )
-
-            create_polygon_fill_between(
-                ax, mean, error, offset=offset, color_name=color_name, 
-                alpha=0.2, axis=axis, folded=folded
-                )
-
-            kwargs = {
-                'zdir'  : axis,
-                'zs'    : offset,
-                'color' : COLORS[color_name],
-                'alpha' : alpha,
-            }
-
-            data = [mean[:, i] for i in range(3) if i != a]
-            ax.plot(*data, lw=1.5, **kwargs)
-            
-            data = [mean[0, i] for i in range(3) if i != a]
-            ax.plot(*data, marker='o', lw=0, ms=ms, **kwargs)
-            
-            data = [mean[-1, i] for i in range(3) if i != a]
-            ax.plot(*data, marker='^', lw=0, ms=ms, **kwargs)
-            
-            data = [mean[FRAMES_PER::FRAMES_PER, i] for i in range(3) if i != a]
-            ax.plot(*data, marker='s', lw=0, ms=ms, **kwargs)
-            
-    return lims
-
 
 #############################################
 def adjust_trajectory_axes(axs, shared_axes=True):
@@ -1112,136 +1141,24 @@ def adjust_trajectory_axes(axs, shared_axes=True):
             ax.set_yticklabels([])
         else:
             ax.set_yticklabels(ax.get_yticks(), fontsize='large')
-                
-
-#############################################
-def obtain_statistics(data, error='std'):
-    # trials x frames x axis
-    data_mean = data.mean(axis=0)
-    
-    if error == 'std':
-        data_err = data.std(axis=0)
-    elif error == 'var':
-        data_err = data.var(axis=0)
-    else:
-        raise ValueError(f'{error} error not recognized. Must be std or var.')
-    
-    return data_mean, data_err
 
 
 #############################################
-def set_all_lims(ax, axis_lims):
-    for a, axis in enumerate(['X', 'Y', 'Z']):
-        if axis == 'X':
-            ax.set_xlim(axis_lims[a])
-        elif axis == 'Y':
-            ax.set_ylim(axis_lims[a])
-        elif axis == 'Z':
-            ax.set_zlim(axis_lims[a])
+def get_colors(start, end, n=3, circ_col=False):
 
+    if n < 2:
+        raise ValueError('Must request at least 2 colors.')
 
-#############################################          
-def get_lims(ax, exp_mean, exp_err, unexp_mean, unexp_err, pad=0):
-    
-    low_exp = (exp_mean - exp_err).min(axis=0) 
-    high_exp = (exp_mean + exp_err).max(axis=0)
-    pad_exp = (high_exp - low_exp) * pad
-    low_exp_pad, high_exp_pad = (low_exp - pad_exp), (high_exp + pad_exp)
-
-    low_unexp = (unexp_mean - unexp_err).min(axis=0)
-    high_unexp = (unexp_mean + unexp_err).max(axis=0)
-    pad_unexp = (high_unexp - low_unexp) * pad
-    low_unexp_pad = low_unexp - pad_unexp
-    high_unexp_pad = high_unexp + pad_unexp
-    
-    projections = []
-    all_lims = []
-    for a, axis in enumerate(['X', 'Y', 'Z']):
-        
-        min_val = np.min([low_exp_pad[a], low_unexp_pad[a]]) 
-        max_val = np.max([high_exp_pad[a], high_unexp_pad[a]])
-        
-        if axis == 'X':
-            lims = list(ax.get_xlim())
-        elif axis == 'Y':
-            lims = list(ax.get_ylim())
-        elif axis == 'Z':
-            lims = list(ax.get_zlim())
-        
-        lims[0] = np.min([min_val, lims[0]])
-        lims[1] = np.max([max_val, lims[1]])
-            
-        if axis in ['Y', 'Z']:
-            projections.append(lims[0]) # low
-        elif axis == 'X':
-            projections.append(lims[1]) # high
-        
-        all_lims.append(lims)
-    
-    return projections, all_lims
-        
-
-#############################################
-def create_polygon_fill_between(ax, mean, error, offset=0, 
-                                color_name='linclab_blue', alpha=0.2, 
-                                axis='x', folded=True, zorder=None):
-    
-    from shapely import geometry
-    from shapely.ops import unary_union
-    
-    n_dims = mean.shape[-1]
-    if n_dims not in [2, 3]:
-        raise NotImplementedError('Expected 2 or 3 dimensions.')
-
-    if n_dims == 3:
-        axes_keep = [v for v, val in enumerate(['x', 'y', 'z']) if val != axis]
+    if circ_col:
+        cm = plt.get_cmap('twilight')
+        samples = np.linspace(0, 1, n + 1)[:n]
     else:
-        axes_keep = [0, 1]
+        cm = LinearSegmentedColormap.from_list('Custom', [start, end], N=n)
+        samples = np.linspace(0, 1, n)
 
-    top = mean + error
-    bottom = mean - error
+    colors = [cm(v) for v in samples]
     
-    # https://stackoverflow.com/questions/59167152/project-a-3d-surfacegenerated-by-plot-trisurf-to-xy-plane-and-plot-the-outline
-    polygons = []
-    for i in range(len(mean) - 1):
-        try:
-            polygons.append(geometry.Polygon(
-                [top[i, axes_keep], 
-                 top[i + 1, axes_keep],
-                 bottom[i + 1, axes_keep],
-                 bottom[i, axes_keep]]))
-            
-        except (ValueError, Exception) as err:
-            logger.warning(f'Polygon creation error: {err}')
-            pass
-    
-    if folded:
-        alpha /= 2
-    else:
-        # Check for self intersection while building up the cascaded union
-        union = geometry.Polygon([])
-        for polygon in polygons:
-            try:
-                union = unary_union([polygon, union])
-            except ValueError as err:
-                logger.warning(f'Union creation error: {err}')
-                pass
-
-        polygons = union
-        if isinstance(polygons, geometry.Polygon):
-            polygons = [polygons]
-    
-    for single_polygon in polygons:
-        x, y = single_polygon.exterior.xy
-
-        plg = PolyCollection(
-            [list(zip(x, y))], alpha=alpha, facecolor=COLORS[color_name],
-            zorder=zorder
-            )
-        if n_dims == 3:
-            ax.add_collection3d(plg, zs=offset, zdir=axis)    
-        else:
-            ax.add_collection(plg)
+    return colors
 
 
 #############################################
@@ -1252,31 +1169,26 @@ if __name__ == '__main__':
     parser.add_argument('-d', '--data_path', type=Path)
 
     # optional parameters
+    parser.add_argument('-r', '--raw', action='store_true', 
+                        help='analyses raw data, instead of latents')
     parser.add_argument('-m', '--model_dir', default='models', type=Path, 
                         help='latent.pkl directory')
     parser.add_argument('-o', '--output_dir', default=None, type=Path, 
                         help='model_dir is used if output_dir is None')
     parser.add_argument('-n', '--num_runs', default=10, type=int, 
                         help='number of decoders to run per decoder type')
-    parser.add_argument('-p', '--projections', action='store_true', 
-                        help='plot error as projections, if plotting 3d')
 
-    parser.add_argument('--shared_model', action='store_true', 
-                help="calculate PCA for full dataset.")
-    parser.add_argument('--plot_2d', action='store_true', 
-                help="calculate and plot PCA components in 2D instead of 3D.")
-
-    parser.add_argument('--run_logreg', action='store_true')
-    parser.add_argument('--run_svm', action='store_true')
+    parser.add_argument('--run_linreg', action='store_true')
     parser.add_argument('--run_nl_decoder', action='store_true')
 
     parser.add_argument('--seed', default=100, type=int)
+    parser.add_argument('--parallel', action='store_true')
     parser.add_argument('--log_level', default='info', 
                         help='log level, e.g. debug, info, error')
 
     args = parser.parse_args()
 
-    logger = utils.get_logger_with_basic_format(level=args.log_level)
+    logger = util.get_logger_with_basic_format(level=args.log_level)
 
     main(args)
 

@@ -14,7 +14,7 @@ import numpy as np
 
 sys.path.extend(['.', '..'])
 from models import ar1
-from utils import run_manager, scheduler, utils, plotter
+from utils import run_manager, scheduler, util, plotter
 
 
 logger = logging.getLogger(__name__)
@@ -23,17 +23,17 @@ logger = logging.getLogger(__name__)
 def main(args):
 
     # set logger to the specified level
-    utils.set_logger_level(logger, level=args.log_level)
+    util.set_logger_level(logger, level=args.log_level)
     
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logger.info(f'Device: {device}')
     
-    utils.seed_all(args.seed)
+    util.seed_all(args.seed)
 
     if args.output_dir is None:
         args.output_dir = Path(args.data_path).parent
 
-    hyperparams = utils.load_parameters(args.config)
+    hyperparams = util.load_parameters(args.config)
     hyperparams, hp_str = adjust_hyperparams(args, hyperparams)
     save_loc, run_name = generate_save_loc(
         hyperparams['model'], args.data_path, args.output_dir, 
@@ -41,8 +41,8 @@ def main(args):
         )
     hyperparams['run_name'] = run_name
 
-    data_dict = utils.read_data(args.data_path)
-    utils.save_parameters(save_loc, hyperparams)
+    data_dict = util.read_data(args.data_path)
+    util.save_parameters(save_loc, hyperparams)
     
     train_dl, valid_dl, plotter_dict, model, objective = prep_model(
         data_dict   = data_dict,
@@ -274,7 +274,7 @@ def prep_data(data_dict, data_suffix='data', batch_size=None, device='cpu'):
         valid_ds, batch_size=valid_data.shape[0]
         )
     
-    time = np.arange(0, num_steps*data_dict['dt'], data_dict['dt'])
+    time = np.arange(0, num_steps * data_dict['dt'], data_dict['dt'])
     
     train_grdtruth = dict()
     for data_type in ['rates', 'latent', 'spikes']:
@@ -551,7 +551,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    logger = utils.get_logger_with_basic_format(level=args.log_level)
+    logger = util.get_logger_with_basic_format(level=args.log_level)
 
     main(args)
 
