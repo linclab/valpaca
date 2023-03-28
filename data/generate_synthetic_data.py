@@ -9,7 +9,7 @@ import yaml
 
 sys.path.extend(['.', '..'])
 from data import synthetic_data
-from utils import utils
+from utils import util
 
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def main(args):
 
     # set logger to the specified level
-    utils.set_logger_level(logger, level=args.log_level)
+    util.set_logger_level(logger, level=args.log_level)
 
     filename = (
         f'lorenz_seed{args.seed}_'
@@ -72,7 +72,7 @@ def main(args):
 
     Path(filepath).parent.mkdir(exist_ok=True, parents=True)
     logger.info(f'Saving synthetic data to {filepath}.')
-    utils.write_data(filepath, data_dict)
+    util.write_data(filepath, data_dict)
 
     
 if __name__ == '__main__':
@@ -101,7 +101,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    logger = utils.get_logger_with_basic_format(level=args.log_level)
+    logger = util.get_logger_with_basic_format(level=args.log_level)
 
     main(args)
 

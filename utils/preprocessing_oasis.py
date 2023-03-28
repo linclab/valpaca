@@ -9,7 +9,7 @@ import numpy as np
 import oasis
 
 sys.path.extend(['.', '..'])
-from utils import utils
+from utils import util
 
 
 logger = logging.getLogger(__name__)
@@ -18,20 +18,20 @@ logger = logging.getLogger(__name__)
 def main(args):
 
     # set logger to the specified level
-    utils.set_logger_level(logger, level=args.log_level)
+    util.set_logger_level(logger, level=args.log_level)
     
     data_name = Path(args.data_path).name
 
     if args.output_dir is None:
         args.output_dir = Path(args.data_path).parent
     
-    data_dict = utils.read_data(args.data_path)
+    data_dict = util.read_data(args.data_path)
     dt = data_dict['dt']
     g = np.exp(-dt / args.tau)
     
     train_size, steps_size, state_size = \
         data_dict[f'train_{args.data_suffix}'].shape
-    valid_size, _, _ = data_dict[f'valid_'].shape
+    valid_size, _, _ = data_dict[f'valid_{args.data_suffix}'].shape
 
     data_size = train_size + valid_size
     data = np.zeros((data_size, steps_size, state_size))
@@ -100,11 +100,11 @@ def main(args):
     data_dict[f'train_{args.data_suffix}'] = train_fluor
     data_dict[f'valid_{args.data_suffix}'] = valid_fluor
     
-    data_dict[f'train_{args.data_suffix}_ospikes'] = train_ospikes
-    data_dict[f'valid_{args.data_suffix}_ospikes'] = valid_ospikes
+    data_dict[f'train_ospikes'] = train_ospikes
+    data_dict[f'valid_ospikes'] = valid_ospikes
     
-    data_dict[f'train_{args.data_suffix}_ocalcium'] = train_ocalcium
-    data_dict[f'valid_{args.data_suffix}_ocalcium'] = valid_ocalcium
+    data_dict[f'train_ocalcium'] = train_ocalcium
+    data_dict[f'valid_ocalcium'] = valid_ocalcium
     
     if not args.known:
         data_dict['obs_gain_init'] = gain
@@ -125,7 +125,7 @@ def main(args):
     savepath = Path(args.output_dir, savename)
     
     savepath.parent.mkdir(exist_ok=True, parents=True)
-    utils.write_data(savepath, data_dict)
+    util.write_data(savepath, data_dict)
 
 
 def deconvolve_calcium_known(X, g=0.9, s_min=0.5):
@@ -217,7 +217,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
 
-    logger = utils.get_logger_with_basic_format(level=args.log_level)
+    logger = util.get_logger_with_basic_format(level=args.log_level)
 
     main(args)
     
