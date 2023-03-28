@@ -3,9 +3,11 @@
 import argparse
 import copy
 import logging
+import multiprocessing
 from pathlib import Path
 import sys
 
+from joblib import Parallel, delayed
 import matplotlib
 import numpy as np
 import torch
@@ -124,7 +126,7 @@ def main(args):
             data_dict, latent_dict, args.output_dir, run_logreg=args.run_logreg, 
             run_svm=args.run_svm, run_nl_decoder=args.run_nl_decoder, 
             num_runs=args.num_runs, seed=args.seed, scale=scale, 
-            log_scores=True
+            log_scores=True, parallel=args.parallel
             )
 
 
@@ -200,7 +202,7 @@ def get_data_idxs_from_theta(unexp, ori, theta=0, compare_same_abc=True):
 #############################################
 def run_decoders(data_dict, latent_dict, output_dir, run_logreg=True, 
                  run_svm=True, run_nl_decoder=False, num_runs=10, scale=True, 
-                 seed=None, log_scores=True):
+                 seed=None, log_scores=True, parallel=False):
 
     if latent_dict is None:
         X_train = data_dict['train_fluor']
@@ -224,7 +226,7 @@ def run_decoders(data_dict, latent_dict, output_dir, run_logreg=True,
                 )
         logreg_scores = perform_decoder_runs(
             logreg_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, scale=scale
+            log_scores=log_scores, scale=scale, parallel=parallel
             )
         np.save(Path(output_dir, 'logreg_decoder_scores'), logreg_scores)
 
@@ -233,7 +235,7 @@ def run_decoders(data_dict, latent_dict, output_dir, run_logreg=True,
             logger.info('RBF SVM scores:', extra={'spacing': '\n'})
         logreg_scores = perform_decoder_runs(
             rbf_svm_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, scale=scale
+            log_scores=log_scores, scale=scale, parallel=parallel
             )
         np.save(Path(output_dir, 'rbf_svm_scores'), logreg_scores)
 
@@ -260,40 +262,72 @@ def run_decoders(data_dict, latent_dict, output_dir, run_logreg=True,
 
         nl_decoder_scores = perform_decoder_runs(
             recurrent_net_eval, X=X, y=y, num_runs=num_runs, seed=seed, 
-            log_scores=log_scores, **decoder_kwargs
+            log_scores=log_scores, parallel=parallel, max_jobs=4, 
+            **decoder_kwargs
             )
 
         np.save(Path(output_dir, 'non_linear_decoder_scores'), nl_decoder_scores)
 
 
 #############################################
+def perform_decoder_run(decoder_fct, X, y, train_p=0.8, seed=None, 
+                        **decoder_kwargs):
+
+    # get a new split
+    train_data, test_data = train_test_split(
+        list(zip(X, y)), train_size=train_p, stratify=y, 
+        random_state=seed,
+        )
+
+    decoder_kwargs['X_train'] = np.asarray(list(zip(*train_data))[0])
+    decoder_kwargs['y_train'] = np.asarray(list(zip(*train_data))[1])
+    decoder_kwargs['X_test'] = np.asarray(list(zip(*test_data))[0])
+    decoder_kwargs['y_test'] = np.asarray(list(zip(*test_data))[1])
+
+    run_score = decoder_fct(seed=seed, **decoder_kwargs)
+
+    return run_score
+
+
+#############################################
 def perform_decoder_runs(decoder_fct, X, y, num_runs=10, seed=None, 
-                         log_scores=True, train_p=TRAIN_P, **decoder_kwargs):
+                         log_scores=True, train_p=TRAIN_P, parallel=False, 
+                         max_jobs=-1, **decoder_kwargs):
 
     util.seed_all(seed)
 
     sub_seeds = [np.random.choice(int(2e5)) for _ in range(num_runs)]
 
-    scores = []
-    for i, sub_seed in enumerate(sub_seeds):
+    if parallel:
+        n_jobs = min(multiprocessing.cpu_count(), num_runs)
+        if n_jobs <= 1:
+            parallel = False
+        if max_jobs != -1:
+            n_jobs = min(n_jobs, max_jobs)
 
-        # get a new split
-        train_data, test_data = train_test_split(
-            list(zip(X, y)), train_size=train_p, stratify=y, 
-            random_state=sub_seed,
+    if parallel:
+        scores = Parallel(n_jobs=n_jobs)(
+            delayed(perform_decoder_run)(
+                decoder_fct, X, y, train_p=train_p, seed=sub_seed, 
+                **decoder_kwargs
+                ) for sub_seed in sub_seeds
             )
+    else:
+        scores = []
 
-        decoder_kwargs['X_train'] = np.asarray(list(zip(*train_data))[0])
-        decoder_kwargs['y_train'] = np.asarray(list(zip(*train_data))[1])
-        decoder_kwargs['X_test'] = np.asarray(list(zip(*test_data))[0])
-        decoder_kwargs['y_test'] = np.asarray(list(zip(*test_data))[1])
-
-        run_score = decoder_fct(seed=sub_seed, **decoder_kwargs)
-        scores.append(run_score)
+    for i, sub_seed in enumerate(sub_seeds):
+        if parallel:
+            run_score = scores[i]
+        else:
+            run_score = perform_decoder_run(
+                decoder_fct, X, y, train_p=train_p, seed=sub_seed, 
+                **decoder_kwargs
+                )
+            scores.append(run_score)
 
         if log_scores:
-            score_mean = np.mean(scores)
-            score_sem = np.std(scores) / np.sqrt(i + 1)
+            score_mean = np.mean(scores[:i+1])
+            score_sem = np.std(scores[:i+1]) / np.sqrt(i + 1)
 
             running_score_str = u'running score: {:.3f} {} {:.3f}'.format(
                 score_mean, PLUS_MIN, score_sem
@@ -864,7 +898,11 @@ def plot_trajectories(ax, proj_factors, exp_idxs, unexp_idxs,
     elif n_comps == 3:
         for axis in ['x', 'y', 'z']:
             ax.locator_params(nbins=5, axis=axis)
-        for axis in [ax.w_xaxis, ax.w_yaxis, ax.w_zaxis]:
+        if hasattr(ax, "zaxis"):
+            axes = [ax.xaxis, ax.yaxis, ax.zaxis]
+        else:
+            axes = [ax.w_xaxis, ax.w_yaxis, ax.w_zaxis] # deprecated
+        for axis in axes:
             axis.line.set_linewidth(1)
             axis.set_ticklabels([])
             axis._axinfo['grid'].update({'linewidth': 0.5})
@@ -1285,6 +1323,7 @@ if __name__ == '__main__':
     parser.add_argument('--run_nl_decoder', action='store_true')
 
     parser.add_argument('--seed', default=100, type=int)
+    parser.add_argument('--parallel', action='store_true')
     parser.add_argument('--log_level', default='info', 
                         help='log level, e.g. debug, info, error')
 

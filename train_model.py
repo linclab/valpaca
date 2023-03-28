@@ -434,8 +434,10 @@ def adjust_hyperparams(args, hyperparams, log_changed=True):
         logging.info(log_str)
 
     # don't include the shared parameters in the string
-    hp_str = '-'.join(hps).replace(' ', '').replace('=', '')
-    hp_str = f'hp-{hp_str}'
+    hp_str = ""
+    if len(hps):
+        hp_str = '-'.join(hps).replace(' ', '').replace('=', '')
+        hp_str = f'hp-{hp_str}'
 
     return hyperparams, hp_str
 
