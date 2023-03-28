@@ -446,7 +446,7 @@ def adjust_hyperparams(args, hyperparams, log_changed=True):
 #-------------------------------------------------------------------
 
 def generate_save_loc(model_params, data_path, output_dir, model_name='valpaca', 
-                      hp_str='hp-', log_save_loc=True):
+                      hp_str='', log_save_loc=True):
 
     data_name = Path(data_path).name
     if 'ospikes' in args.data_suffix:
@@ -462,7 +462,9 @@ def generate_save_loc(model_params, data_path, output_dir, model_name='valpaca',
             key = key.replace(src, targ)
         hp_list.append(f'{key[:4]}{val}')
 
-    run_name = '{}_{}'.format('_'.join(sorted(hp_list)), hp_str)
+    run_name = '_'.join(sorted(hp_list))
+    if len(hp_str):
+        run_name = f'{run_name}_{hp_str}'
     save_loc = Path(output_dir, data_name, model_name, run_name)
 
     if log_save_loc:

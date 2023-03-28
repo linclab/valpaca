@@ -20,3 +20,8 @@ To extract latents from data, using a trained model, run `infer_latent.py`.
 * `hyperparameters`: yaml files defining hyperparameter values for different models and datasets  
 * `models`: modules defining models, and objective functions  
 * `utils`: processing, training, and plotting utilities  
+
+## 5. Example notebook
+
+Follow the link below for an example of how to run VaLPACa on new data.  
+[![Run the Google Colab notebook](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/linclab/valpaca/blob/main/run_valpaca_example.ipynb)
