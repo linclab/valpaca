@@ -924,7 +924,11 @@ def plot_trajectories(ax_mean, ax_single, proj_factors, feature,
         elif n_comps == 3:
             for axis in ['x', 'y', 'z']:
                 ax.locator_params(nbins=5, axis=axis)
-            for axis in [ax.w_xaxis, ax.w_yaxis, ax.w_zaxis]:
+            if hasattr(ax, "zaxis"):
+                axes = [ax.xaxis, ax.yaxis, ax.zaxis]
+            else:
+                axes = [ax.w_xaxis, ax.w_yaxis, ax.w_zaxis] # deprecated
+            for axis in axes:
                 axis.line.set_linewidth(1)
                 axis.set_ticklabels([])
                 axis._axinfo['grid'].update({'linewidth': 0.5})
